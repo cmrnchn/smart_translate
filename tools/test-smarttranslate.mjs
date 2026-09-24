@@ -143,10 +143,29 @@ function testWebViewHtml() {
     conversationLang: "Spanish",
     primaryFlag: "🇺🇸",
     conversationFlag: "🇪🇸",
-    engine: "Apple Voice"
+    primaryCode: "EN",
+    conversationCode: "ES",
+    engine: "Apple Voice",
+    resultText: "¿Nos vemos mañana?",
+    meansText: "See you tomorrow?"
   });
-  assertIncludes("v1 home has conversation", v1Html, 'data-action="conversation"');
+  assertIncludes("v1 home has Quick tab", v1Html, ">Quick</span>");
+  assertIncludes("v1 home has Talk tab", v1Html, ">Talk</span>");
+  assertIncludes("v1 home has paste stack action", v1Html, 'data-action="paste"');
+  assertIncludes("v1 home has transcribe stack action", v1Html, 'data-action="transcribe"');
+  assertIncludes("v1 home has send stack action", v1Html, 'data-action="send"');
+  assertIncludes("v1 home has result label", v1Html, "RESULT");
+  assertIncludes("v1 home uses Means label", v1Html, "Means: See you tomorrow?");
+  assertIncludes("v1 home has copy result action", v1Html, 'data-action="copy"');
+  assertIncludes("v1 home has dictate result action", v1Html, 'data-action="dictate"');
+  assertIncludes("v1 home has share result action", v1Html, 'data-action="share"');
+  assertIncludes("v1 home has Talk action", v1Html, 'data-action="conversation"');
   assertIncludes("v1 home has settings", v1Html, 'data-action="settings"');
+  if (v1Html.includes("Walkie")) {
+    fail("v1 home omits Walkie", "Walkie appears in Quick chrome or tabs");
+  } else {
+    ok("v1 home omits Walkie");
+  }
 }
 
 async function testWebViewPresentOrder() {
@@ -221,6 +240,43 @@ async function testWebViewPresentOrder() {
   }
 }
 
+async function testV1SendPayload() {
+  console.log("\nQuick send payload");
+
+  class MockWebView {
+    async loadHTML(_html) {}
+
+    present(_fullscreen) {
+      return new Promise(() => {});
+    }
+
+    async evaluateJavaScript(_script, _useCallback) {
+      return JSON.stringify({ a: "send", v: "See you tomorrow?" });
+    }
+  }
+
+  const UI = loadScriptableModule("scripts/SmartTranslateUI.js", {
+    WebView: MockWebView,
+    Timer: {
+      schedule(_seconds, _repeating, callback) {
+        callback();
+      }
+    }
+  });
+  UI.resetSession();
+
+  const action = await UI.presentV1Home({
+    primaryCode: "EN",
+    conversationCode: "ES"
+  });
+
+  if (action?.action === "send" && action?.text === "See you tomorrow?") {
+    ok("v1 send returns edited input text");
+  } else {
+    fail("v1 send returns edited input text", `unexpected payload: ${JSON.stringify(action)}`);
+  }
+}
+
 function testBundleRegressionGuards() {
   console.log("\nBundle regression guards");
   const uiSource = read("scripts/SmartTranslateUI.js");
@@ -259,6 +315,7 @@ async function main() {
   testInstallerBuild();
   testWebViewHtml();
   await testWebViewPresentOrder();
+  await testV1SendPayload();
   testBundleRegressionGuards();
   testOptionalDeepL();
 
