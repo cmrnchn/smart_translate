@@ -139,13 +139,8 @@ function testWebViewHtml() {
   }
 
   const v1Html = UI.buildV1HomeHTML({
-    primaryLang: "English (US)",
-    conversationLang: "Spanish",
-    primaryFlag: "🇺🇸",
-    conversationFlag: "🇪🇸",
     primaryCode: "EN",
     conversationCode: "ES",
-    engine: "Apple Voice",
     resultText: "¿Nos vemos mañana?",
     meansText: "See you tomorrow?"
   });
@@ -194,15 +189,7 @@ async function testWebViewPresentOrder() {
     }
   }
 
-  const UI = loadScriptableModule("scripts/SmartTranslateUI.js", {
-    WebView: MockWebView,
-    Timer: {
-      schedule(_seconds, _repeating, callback) {
-        callback();
-      }
-    }
-  });
-  UI.resetSession();
+  const UI = loadUIWithMockWebView(MockWebView);
 
   const action = await UI.presentProHome({
     primaryLang: "English",
@@ -240,6 +227,19 @@ async function testWebViewPresentOrder() {
   }
 }
 
+function loadUIWithMockWebView(MockWebView) {
+  const UI = loadScriptableModule("scripts/SmartTranslateUI.js", {
+    WebView: MockWebView,
+    Timer: {
+      schedule(_seconds, _repeating, callback) {
+        callback();
+      }
+    }
+  });
+  UI.resetSession();
+  return UI;
+}
+
 async function testV1SendPayload() {
   console.log("\nQuick send payload");
 
@@ -255,15 +255,7 @@ async function testV1SendPayload() {
     }
   }
 
-  const UI = loadScriptableModule("scripts/SmartTranslateUI.js", {
-    WebView: MockWebView,
-    Timer: {
-      schedule(_seconds, _repeating, callback) {
-        callback();
-      }
-    }
-  });
-  UI.resetSession();
+  const UI = loadUIWithMockWebView(MockWebView);
 
   const action = await UI.presentV1Home({
     primaryCode: "EN",

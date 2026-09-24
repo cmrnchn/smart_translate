@@ -93,7 +93,7 @@ async function main() {
     const actionId = typeof action === "object" ? action.action : action;
     switch (actionId) {
       case "type":
-        await runType(config, quickState);
+        await runType(quickState);
         break;
       case "paste":
         await runPaste(quickState);
@@ -151,14 +151,8 @@ async function showMainMenu(config, quickState) {
   const context = {
     primaryLang: Shared.getLanguageDisplayName(config.languages.primary),
     conversationLang: Shared.getLanguageDisplayName(config.languages.conversation),
-    primaryCode: getLanguagePill(config.languages.primary),
-    conversationCode: getLanguagePill(config.languages.conversation),
-    primaryFlag: UI?.flagForCode
-      ? UI.flagForCode(config.languages.primary)
-      : "🌐",
-    conversationFlag: UI?.flagForCode
-      ? UI.flagForCode(config.languages.conversation)
-      : "🌐",
+    primaryCode: Shared.normalizeLanguage(config.languages.primary),
+    conversationCode: Shared.normalizeLanguage(config.languages.conversation),
     engine,
     inputText: quickState.inputText,
     resultText: quickState.result?.translatedText || "",
@@ -205,13 +199,7 @@ async function showMainMenu(config, quickState) {
 // ONE-SHOT WORKFLOWS
 // ============================================================
 
-function getLanguagePill(code) {
-  return String(code || "")
-    .toUpperCase()
-    .replace(/^([A-Z]{2}).*$/, "$1");
-}
-
-async function runType(config, quickState) {
+async function runType(quickState) {
   const text = await Shared.promptForText(
     "Type",
     "Enter text for Quick mode.",
@@ -257,13 +245,7 @@ async function runSend(text, config, quickState) {
 
   const result = await Shared.runOneShot(sourceText, config);
   if (result) {
-    quickState.result = {
-      sourceText,
-      translatedText: result.translation,
-      targetLanguage: result.targetLanguage,
-      detectedLanguage: result.detectedLanguage
-    };
-    quickState.inputText = "";
+    storeQuickResult(quickState, sourceText, result);
   }
 }
 
@@ -276,19 +258,21 @@ async function runDictate(config, quickState) {
     }
     const result = await Shared.runOneShot(text, config);
     if (result) {
-      quickState.result = {
-        sourceText: text.trim(),
-        translatedText: result.translation,
-        targetLanguage: result.targetLanguage,
-        detectedLanguage: result.detectedLanguage
-      };
-      quickState.inputText = "";
+      storeQuickResult(quickState, text.trim(), result);
     }
   } catch (error) {
     await Shared.showError(
       `Dictation failed.\n\n${error?.message || "Unknown error."}`
     );
   }
+}
+
+function storeQuickResult(quickState, sourceText, result) {
+  quickState.result = {
+    sourceText,
+    translatedText: result.translation
+  };
+  quickState.inputText = "";
 }
 
 async function runCopy(quickState) {
