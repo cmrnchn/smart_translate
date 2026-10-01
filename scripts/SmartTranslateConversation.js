@@ -30,7 +30,7 @@ module.exports = {
 // ============================================================
 
 async function runConversation(config, hooks = {}) {
-  const menu = await showConversationMenu(hooks);
+  const menu = hooks.forceAction || (await showConversationMenu(hooks));
   switch (menu) {
     case "continue": {
       const session = await loadActiveSession();

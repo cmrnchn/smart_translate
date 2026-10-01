@@ -3,10 +3,9 @@
 // SmartTranslate v1 entry script for Scriptable.
 //
 // Menu:
-//   Type         → type text, translate once, speak
-//   Paste        → clipboard → translate once → speak
+//   Quick        → type/paste/transcribe, then send to translate
 //   Dictate      → speech → translate once → speak
-//   Conversation → multi-turn session (separate module)
+//   Talk         → multi-turn session (separate module)
 //   Settings     → languages, API keys, speech engine
 //
 // Requires (same Scriptable folder):
@@ -64,6 +63,10 @@ Script.complete();
 
 async function main() {
   let config = await Shared.loadConfig();
+  const quickState = {
+    inputText: "",
+    result: null
+  };
 
   if (!config || !config.version) {
     const isFirstRun = !config;
@@ -82,23 +85,49 @@ async function main() {
   }
 
   while (true) {
-    const action = await showMainMenu(config);
+    const action = await showMainMenu(config, quickState);
     if (!action || action === "cancel") {
       break;
     }
 
-    switch (action) {
+    const actionId = typeof action === "object" ? action.action : action;
+    switch (actionId) {
       case "type":
-        await runType(config);
+        await runType(quickState);
         break;
       case "paste":
-        await runPaste(config);
+        await runPaste(quickState);
+        break;
+      case "transcribe":
+        await runTranscribe(config, quickState);
+        break;
+      case "send":
+        await runSend(
+          typeof action === "object" ? action.text : quickState.inputText,
+          config,
+          quickState
+        );
         break;
       case "dictate":
-        await runDictate(config);
+        await runDictate(config, quickState);
+        break;
+      case "copy":
+        await runCopy(quickState);
+        break;
+      case "share":
+        await runShare(quickState);
+        break;
+      case "library":
+        await Conversation.runConversation(config, { forceAction: "history" });
+        break;
+      case "people":
+      case "search":
+        await showProSurfaceMessage(actionId);
         break;
       case "conversation":
         await Conversation.runConversation(config);
+        break;
+      case "quick":
         break;
       case "settings": {
         const updated = await runSettingsMenu(config);
@@ -117,18 +146,17 @@ async function main() {
 // MAIN MENU
 // ============================================================
 
-async function showMainMenu(config) {
+async function showMainMenu(config, quickState) {
   const engine = config.speech.engine === "apple" ? "Apple Voice" : "ElevenLabs";
   const context = {
     primaryLang: Shared.getLanguageDisplayName(config.languages.primary),
     conversationLang: Shared.getLanguageDisplayName(config.languages.conversation),
-    primaryFlag: UI?.flagForCode
-      ? UI.flagForCode(config.languages.primary)
-      : "🌐",
-    conversationFlag: UI?.flagForCode
-      ? UI.flagForCode(config.languages.conversation)
-      : "🌐",
-    engine
+    primaryCode: Shared.normalizeLanguage(config.languages.primary),
+    conversationCode: Shared.normalizeLanguage(config.languages.conversation),
+    engine,
+    inputText: quickState.inputText,
+    resultText: quickState.result?.translatedText || "",
+    meansText: quickState.result?.sourceText || ""
   };
 
   if (UI?.presentV1Home) {
@@ -145,17 +173,19 @@ async function showMainMenu(config) {
     subtitle: `${context.primaryLang} ↔ ${context.conversationLang} · ${engine}`,
     sections: [
       {
-        header: "Translate",
+        header: "Quick",
         rows: [
-          { id: "type", title: "Type", subtitle: "Enter text", symbol: "keyboard" },
-          { id: "paste", title: "Paste", subtitle: "From clipboard", symbol: "doc.on.clipboard" },
-          { id: "dictate", title: "Dictate", subtitle: "Speak to translate", symbol: "mic" }
+          { id: "type", title: "Type", subtitle: "Edit input text", symbol: "keyboard" },
+          { id: "paste", title: "Paste", subtitle: "Fill input from clipboard", symbol: "doc.on.clipboard" },
+          { id: "transcribe", title: "Transcribe", subtitle: "Speech into input", symbol: "mic" },
+          { id: "send", title: "Send", subtitle: "Translate current input", symbol: "character.bubble" },
+          { id: "dictate", title: "Dictate", subtitle: "Speech translates immediately", symbol: "speaker" }
         ]
       },
       {
-        header: "More",
+        header: "Talk",
         rows: [
-          { id: "conversation", title: "Conversation", subtitle: "Multi-turn sessions", symbol: "person.2" },
+          { id: "conversation", title: "Talk", subtitle: "Multi-turn sessions", symbol: "person.2" },
           { id: "settings", title: "Settings", subtitle: "Languages and keys", symbol: "gearshape" }
         ]
       }
@@ -169,39 +199,112 @@ async function showMainMenu(config) {
 // ONE-SHOT WORKFLOWS
 // ============================================================
 
-async function runType(config) {
+async function runType(quickState) {
   const text = await Shared.promptForText(
     "Type",
-    "Enter the text to translate."
+    "Enter text for Quick mode.",
+    quickState.inputText || ""
   );
   if (text === null) {
     return;
   }
-  await Shared.runOneShot(text, config);
+  quickState.inputText = text;
 }
 
-async function runPaste(config) {
+async function runPaste(quickState) {
   const text = Pasteboard.paste() || "";
   if (!text.trim()) {
     await Shared.showError("Clipboard is empty.");
     return;
   }
-  await Shared.runOneShot(text, config);
+  quickState.inputText = text;
 }
 
-async function runDictate(config) {
+async function runTranscribe(config, quickState) {
   try {
     const text = await Shared.dictateText(config);
     if (!text || !text.trim()) {
       await Shared.showError("No speech was captured.");
       return;
     }
-    await Shared.runOneShot(text, config);
+    quickState.inputText = text;
+  } catch (error) {
+    await Shared.showError(
+      `Transcription failed.\n\n${error?.message || "Unknown error."}`
+    );
+  }
+}
+
+async function runSend(text, config, quickState) {
+  const sourceText = String(text || "").trim();
+  quickState.inputText = text || "";
+  if (!sourceText) {
+    await Shared.showError("Please enter some text to translate.");
+    return;
+  }
+
+  const result = await Shared.runOneShot(sourceText, config);
+  if (result) {
+    storeQuickResult(quickState, sourceText, result);
+  }
+}
+
+async function runDictate(config, quickState) {
+  try {
+    const text = await Shared.dictateText(config);
+    if (!text || !text.trim()) {
+      await Shared.showError("No speech was captured.");
+      return;
+    }
+    const result = await Shared.runOneShot(text, config);
+    if (result) {
+      storeQuickResult(quickState, text.trim(), result);
+    }
   } catch (error) {
     await Shared.showError(
       `Dictation failed.\n\n${error?.message || "Unknown error."}`
     );
   }
+}
+
+function storeQuickResult(quickState, sourceText, result) {
+  quickState.result = {
+    sourceText,
+    translatedText: result.translation
+  };
+  quickState.inputText = "";
+}
+
+async function runCopy(quickState) {
+  const text = quickState.result?.translatedText || "";
+  if (!text) {
+    await Shared.showError("No translation to copy yet.");
+    return;
+  }
+  Pasteboard.copy(text);
+  await Shared.showSuccess("Copied", "Translation copied to the clipboard.");
+}
+
+async function runShare(quickState) {
+  const text = quickState.result?.translatedText || "";
+  if (!text) {
+    await Shared.showError("No translation to share yet.");
+    return;
+  }
+  if (typeof ShareSheet !== "undefined" && ShareSheet.present) {
+    await ShareSheet.present([text]);
+    return;
+  }
+  Pasteboard.copy(text);
+  await Shared.showSuccess("Copied", "Sharing is unavailable here, so the translation was copied.");
+}
+
+async function showProSurfaceMessage(actionId) {
+  const label = actionId === "people" ? "People" : "Library search";
+  await Shared.showSuccess(
+    label,
+    `${label} lives in SmartTranslate Pro. Open SmartTranslatePro to use it.`
+  );
 }
 
 // ============================================================

@@ -231,9 +231,13 @@ async function ensureSecret(title, keychainKey, message, options = {}) {
     return existing;
   }
 
-  return await configureSecret(title, keychainKey, message, {
+  const value = await configureSecret(title, keychainKey, message, {
     allowKeepExisting: !!existing
   });
+  if (value) {
+    Keychain.set(keychainKey, value);
+  }
+  return value;
 }
 
 async function configureSecret(title, keychainKey, message, options = {}) {
@@ -274,7 +278,7 @@ async function configureSecret(title, keychainKey, message, options = {}) {
     await showError(`${title} cannot be empty.`);
     return null;
   }
-  Keychain.set(keychainKey, newKey);
+  // Do not Keychain.set here — callers that verify (saveApiKey) must write only after verify succeeds.
   return newKey;
 }
 
@@ -352,11 +356,12 @@ async function verifyDeepLKey(apiKey) {
   request.method = "GET";
   request.timeoutInterval = DEEPL_TIMEOUT;
   request.headers = { Authorization: `DeepL-Auth-Key ${key}` };
-  const response = await request.load();
-  if (response.statusCode === 200) {
+  await request.load();
+  const status = request.response?.statusCode;
+  if (status === 200) {
     return true;
   }
-  throw new Error(`DeepL rejected the key (HTTP ${response.statusCode}).`);
+  throw new Error(`DeepL rejected the key (HTTP ${status}).`);
 }
 
 async function verifyElevenLabsKey(apiKey) {
@@ -840,6 +845,117 @@ function getAlternateTarget(languages) {
 // TTS
 // ============================================================
 
+function pauseMs(ms) {
+  return new Promise((resolve) => {
+    Timer.schedule(ms / 1000, false, () => {
+      resolve();
+    });
+  });
+}
+
+function audioDataByteLength(audioData) {
+  if (!audioData) {
+    return 0;
+  }
+  if (typeof audioData.getBytes === "function") {
+    try {
+      const bytes = audioData.getBytes();
+      return bytes?.length || 0;
+    } catch (error) {
+      return 0;
+    }
+  }
+  if (typeof audioData.byteLength === "number") {
+    return audioData.byteLength;
+  }
+  if (typeof audioData.toBase64String === "function") {
+    try {
+      return audioData.toBase64String().length > 0 ? 1 : 0;
+    } catch (error) {
+      return 0;
+    }
+  }
+  return 0;
+}
+
+async function playMpegWithWebView(audioData) {
+  if (typeof WebView === "undefined") {
+    throw new Error("WebView is required to play ElevenLabs audio on Scriptable.");
+  }
+  if (typeof audioData.toBase64String !== "function") {
+    throw new Error("ElevenLabs audio Data is missing toBase64String().");
+  }
+  const b64 = audioData.toBase64String();
+  if (!b64) {
+    throw new Error("Received empty audio data from ElevenLabs.");
+  }
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      background: #0b0b0f;
+      color: #f5f5f7;
+      font: 16px -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    audio { width: min(92vw, 420px); }
+    button {
+      font: 600 16px -apple-system, BlinkMacSystemFont, sans-serif;
+      padding: 12px 20px;
+      border-radius: 12px;
+      border: 0;
+      background: #0a84ff;
+      color: #fff;
+    }
+  </style>
+</head>
+<body>
+  <p>Playing translation</p>
+  <audio id="player" controls autoplay src="data:audio/mpeg;base64,${b64}"></audio>
+  <button type="button" id="done">Done</button>
+</body>
+</html>`;
+
+  const webView = new WebView();
+  await webView.loadHTML(html);
+  const dismissPromise = webView.present(false);
+  await pauseMs(300);
+  const resultPromise = webView.evaluateJavaScript(
+    `(function () {
+      var player = document.getElementById("player");
+      var done = document.getElementById("done");
+      function finish(reason) {
+        completion(String(reason || "done"));
+      }
+      if (!player) {
+        finish("missing");
+        return;
+      }
+      player.addEventListener("ended", function () { finish("ended"); });
+      player.addEventListener("error", function () { finish("error"); });
+      if (done) {
+        done.addEventListener("click", function () { finish("done"); });
+      }
+      try { player.play(); } catch (error) {}
+    })();`,
+    true
+  );
+  const result = await Promise.race([resultPromise, dismissPromise]);
+  if (String(result) === "error") {
+    throw new Error("WebView audio playback failed.");
+  }
+}
+
 async function speakTranslation(text, targetLanguage, config) {
   if (
     config.speech.engine === "elevenlabs" &&
@@ -858,6 +974,13 @@ async function speakTranslation(text, targetLanguage, config) {
         console.error(
           `ElevenLabs failed: ${error.message}. Falling back to Apple speech.`
         );
+        await showError(
+          `ElevenLabs speech failed.
+
+${error?.message || "Unknown error."}
+
+Falling back to Apple speech.`
+        );
       }
     }
   }
@@ -865,9 +988,16 @@ async function speakTranslation(text, targetLanguage, config) {
 }
 
 async function speakWithApple(text, targetLanguage, config) {
-  // Official API is Speech.speak(text) only. Rate/language options are not
-  // documented; keep rate in config for future use / ElevenLabs parity.
-  await Speech.speak(text);
+  // Official API is Speech.speak(text) only (sync, no Promise). Rate/language
+  // options are not documented; keep rate in config for ElevenLabs parity.
+  Speech.speak(text);
+  // Hold before callers re-present the home WebView over in-flight speech.
+  const words = String(text || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
+  const ms = Math.min(30000, Math.max(1500, words * 400 + 500));
+  await pauseMs(ms);
 }
 
 async function speakWithElevenLabs(text, voiceId, apiKey, config) {
@@ -886,27 +1016,15 @@ async function speakWithElevenLabs(text, voiceId, apiKey, config) {
   });
 
   const audioData = await request.load();
-  if (!audioData || audioData.byteLength === 0) {
+  const status = request.response?.statusCode;
+  if (status && status >= 400) {
+    throw new Error(`ElevenLabs TTS failed (HTTP ${status}).`);
+  }
+  if (!audioData || audioDataByteLength(audioData) === 0) {
     throw new Error("Received empty audio data from ElevenLabs.");
   }
 
-  const fm = FileManager.local();
-  const audioPath = fm.joinPath(
-    fm.temporaryDirectory(),
-    `smart_translate_${Date.now()}.mp3`
-  );
-  fm.write(audioPath, audioData);
-
-  // Prefer Sound.play when available; fall back to QuickLook (documented).
-  if (typeof Sound !== "undefined" && typeof Sound.play === "function") {
-    await Sound.play(audioPath);
-  } else {
-    await QuickLook.present(audioPath);
-  }
-
-  if (fm.fileExists(audioPath)) {
-    fm.remove(audioPath);
-  }
+  await playMpegWithWebView(audioData);
 }
 
 async function fetchElevenLabsVoices(apiKey) {

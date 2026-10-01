@@ -237,9 +237,13 @@ async function ensureSecret(title, keychainKey, message, options = {}) {
     return existing;
   }
 
-  return await configureSecret(title, keychainKey, message, {
+  const value = await configureSecret(title, keychainKey, message, {
     allowKeepExisting: !!existing
   });
+  if (value) {
+    Keychain.set(keychainKey, value);
+  }
+  return value;
 }
 
 async function configureSecret(title, keychainKey, message, options = {}) {
@@ -280,7 +284,7 @@ async function configureSecret(title, keychainKey, message, options = {}) {
     await showError(`${title} cannot be empty.`);
     return null;
   }
-  Keychain.set(keychainKey, newKey);
+  // Do not Keychain.set here — callers that verify (saveApiKey) must write only after verify succeeds.
   return newKey;
 }
 
@@ -358,11 +362,12 @@ async function verifyDeepLKey(apiKey) {
   request.method = "GET";
   request.timeoutInterval = DEEPL_TIMEOUT;
   request.headers = { Authorization: `DeepL-Auth-Key ${key}` };
-  const response = await request.load();
-  if (response.statusCode === 200) {
+  await request.load();
+  const status = request.response?.statusCode;
+  if (status === 200) {
     return true;
   }
-  throw new Error(`DeepL rejected the key (HTTP ${response.statusCode}).`);
+  throw new Error(`DeepL rejected the key (HTTP ${status}).`);
 }
 
 async function verifyElevenLabsKey(apiKey) {
@@ -846,6 +851,117 @@ function getAlternateTarget(languages) {
 // TTS
 // ============================================================
 
+function pauseMs(ms) {
+  return new Promise((resolve) => {
+    Timer.schedule(ms / 1000, false, () => {
+      resolve();
+    });
+  });
+}
+
+function audioDataByteLength(audioData) {
+  if (!audioData) {
+    return 0;
+  }
+  if (typeof audioData.getBytes === "function") {
+    try {
+      const bytes = audioData.getBytes();
+      return bytes?.length || 0;
+    } catch (error) {
+      return 0;
+    }
+  }
+  if (typeof audioData.byteLength === "number") {
+    return audioData.byteLength;
+  }
+  if (typeof audioData.toBase64String === "function") {
+    try {
+      return audioData.toBase64String().length > 0 ? 1 : 0;
+    } catch (error) {
+      return 0;
+    }
+  }
+  return 0;
+}
+
+async function playMpegWithWebView(audioData) {
+  if (typeof WebView === "undefined") {
+    throw new Error("WebView is required to play ElevenLabs audio on Scriptable.");
+  }
+  if (typeof audioData.toBase64String !== "function") {
+    throw new Error("ElevenLabs audio Data is missing toBase64String().");
+  }
+  const b64 = audioData.toBase64String();
+  if (!b64) {
+    throw new Error("Received empty audio data from ElevenLabs.");
+  }
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      background: #0b0b0f;
+      color: #f5f5f7;
+      font: 16px -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    audio { width: min(92vw, 420px); }
+    button {
+      font: 600 16px -apple-system, BlinkMacSystemFont, sans-serif;
+      padding: 12px 20px;
+      border-radius: 12px;
+      border: 0;
+      background: #0a84ff;
+      color: #fff;
+    }
+  </style>
+</head>
+<body>
+  <p>Playing translation</p>
+  <audio id="player" controls autoplay src="data:audio/mpeg;base64,${b64}"></audio>
+  <button type="button" id="done">Done</button>
+</body>
+</html>`;
+
+  const webView = new WebView();
+  await webView.loadHTML(html);
+  const dismissPromise = webView.present(false);
+  await pauseMs(300);
+  const resultPromise = webView.evaluateJavaScript(
+    `(function () {
+      var player = document.getElementById("player");
+      var done = document.getElementById("done");
+      function finish(reason) {
+        completion(String(reason || "done"));
+      }
+      if (!player) {
+        finish("missing");
+        return;
+      }
+      player.addEventListener("ended", function () { finish("ended"); });
+      player.addEventListener("error", function () { finish("error"); });
+      if (done) {
+        done.addEventListener("click", function () { finish("done"); });
+      }
+      try { player.play(); } catch (error) {}
+    })();`,
+    true
+  );
+  const result = await Promise.race([resultPromise, dismissPromise]);
+  if (String(result) === "error") {
+    throw new Error("WebView audio playback failed.");
+  }
+}
+
 async function speakTranslation(text, targetLanguage, config) {
   if (
     config.speech.engine === "elevenlabs" &&
@@ -864,6 +980,13 @@ async function speakTranslation(text, targetLanguage, config) {
         console.error(
           `ElevenLabs failed: ${error.message}. Falling back to Apple speech.`
         );
+        await showError(
+          `ElevenLabs speech failed.
+
+${error?.message || "Unknown error."}
+
+Falling back to Apple speech.`
+        );
       }
     }
   }
@@ -871,9 +994,16 @@ async function speakTranslation(text, targetLanguage, config) {
 }
 
 async function speakWithApple(text, targetLanguage, config) {
-  // Official API is Speech.speak(text) only. Rate/language options are not
-  // documented; keep rate in config for future use / ElevenLabs parity.
-  await Speech.speak(text);
+  // Official API is Speech.speak(text) only (sync, no Promise). Rate/language
+  // options are not documented; keep rate in config for ElevenLabs parity.
+  Speech.speak(text);
+  // Hold before callers re-present the home WebView over in-flight speech.
+  const words = String(text || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
+  const ms = Math.min(30000, Math.max(1500, words * 400 + 500));
+  await pauseMs(ms);
 }
 
 async function speakWithElevenLabs(text, voiceId, apiKey, config) {
@@ -892,27 +1022,15 @@ async function speakWithElevenLabs(text, voiceId, apiKey, config) {
   });
 
   const audioData = await request.load();
-  if (!audioData || audioData.byteLength === 0) {
+  const status = request.response?.statusCode;
+  if (status && status >= 400) {
+    throw new Error(`ElevenLabs TTS failed (HTTP ${status}).`);
+  }
+  if (!audioData || audioDataByteLength(audioData) === 0) {
     throw new Error("Received empty audio data from ElevenLabs.");
   }
 
-  const fm = FileManager.local();
-  const audioPath = fm.joinPath(
-    fm.temporaryDirectory(),
-    `smart_translate_${Date.now()}.mp3`
-  );
-  fm.write(audioPath, audioData);
-
-  // Prefer Sound.play when available; fall back to QuickLook (documented).
-  if (typeof Sound !== "undefined" && typeof Sound.play === "function") {
-    await Sound.play(audioPath);
-  } else {
-    await QuickLook.present(audioPath);
-  }
-
-  if (fm.fileExists(audioPath)) {
-    fm.remove(audioPath);
-  }
+  await playMpegWithWebView(audioData);
 }
 
 async function fetchElevenLabsVoices(apiKey) {
@@ -1388,7 +1506,7 @@ return {
 // ============================================================
 
 async function runConversation(config, hooks = {}) {
-  const menu = await showConversationMenu(hooks);
+  const menu = hooks.forceAction || (await showConversationMenu(hooks));
   switch (menu) {
     case "continue": {
       const session = await loadActiveSession();
@@ -2849,8 +2967,12 @@ const ICON_PATHS = {
     '<rect x="4" y="7" width="16" height="10" rx="2.5"/><path d="M8 11h8M8 14.5h5"/>',
   paste:
     '<rect x="7" y="5" width="11" height="14" rx="2"/><path d="M9 5V4.5A1.5 1.5 0 0 1 10.5 3h5A1.5 1.5 0 0 1 17 4.5V5"/><path d="M9.5 12h7M9.5 15h4"/>',
+  copy:
+    '<rect x="9" y="9" width="10" height="10" rx="2"/><path d="M5 15.5V6.5A1.5 1.5 0 0 1 6.5 5H15"/>',
   dictate:
     '<rect x="9.5" y="4" width="5" height="9" rx="2.5"/><path d="M6.5 11.5a5.5 5.5 0 0 0 11 0M12 17v3"/>',
+  send:
+    '<path d="M20 4L9.5 14.5"/><path d="M20 4l-6.5 16-4-8.5L4 9l16-5z"/>',
   library:
     '<path d="M5 6.5h5v11H5zM14 6.5h5v11h-5z"/><path d="M7.5 9h0M16.5 9h0M7.5 12h0M16.5 12h0"/>',
   people:
@@ -2867,7 +2989,7 @@ const ICON_PATHS = {
     '<path d="M12 4.5l1.6 3.6 3.9.4-2.9 2.6.9 3.8-3.5-2.1-3.5 2.1.9-3.8-2.9-2.6 3.9-.4z"/>',
   list: '<path d="M6 7.5h12M6 12h12M6 16.5h12"/>',
   share:
-    '<path d="M12 4.5v11M8.5 8l3.5-3.5L15.5 8"/><rect x="5" y="15.5" width="14" height="4" rx="1.2"/>',
+    '<circle cx="18" cy="5" r="2.8"/><circle cx="6" cy="12" r="2.8"/><circle cx="18" cy="19" r="2.8"/><path d="M8.5 13.4l7 4.2M15.5 6.4l-7 4.2"/>',
   person:
     '<circle cx="12" cy="9" r="3"/><path d="M5.5 18.5c.9-2.8 3-4.5 6.5-4.5s5.6 1.7 6.5 4.5"/>',
   "person-add":
@@ -3143,9 +3265,104 @@ const UI_STYLES = `
     word-break: break-all; margin-bottom: 12px;
   }
   .key-actions { display: flex; flex-direction: column; gap: 8px; }
+  body.quick-screen-body {
+    width: 100%; min-height: 100vh; height: 100vh; overflow: hidden;
+    background: #000; color: #fff;
+    padding: 0 14px calc(env(safe-area-inset-bottom, 0px) + 18px);
+    display: flex; flex-direction: column;
+  }
+  .quick-app {
+    width: 100%; max-width: 390px; min-height: 100%; margin: 0 auto;
+    display: flex; flex-direction: column;
+  }
+  .quick-status {
+    height: 54px; display: flex; align-items: flex-end; justify-content: space-between;
+    padding: 0 8px 8px; font-size: 15px; font-weight: 600;
+  }
+  .quick-status-right { display: flex; gap: 6px; align-items: center; font-size: 13px; }
+  .quick-header {
+    display: grid; grid-template-columns: 72px 1fr 72px; align-items: center;
+    gap: 4px; margin-bottom: 10px;
+  }
+  .quick-icons { display: flex; gap: 14px; align-items: center; min-width: 0; }
+  .quick-icons.right { justify-content: flex-end; }
+  .quick-chrome-btn {
+    appearance: none; border: 0; background: transparent; color: #cfcfcf;
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    padding: 0; font-size: 8px; letter-spacing: 0.02em;
+  }
+  .quick-chrome-btn .ui-icon svg { width: 20px; height: 20px; stroke: #fff; stroke-width: 1.7; }
+  .quick-brand-wrap { text-align: center; min-width: 0; }
+  .quick-brand { font-size: 17px; font-weight: 700; letter-spacing: -0.02em; }
+  .quick-langs { display: flex; justify-content: center; gap: 6px; margin-top: 6px; }
+  .quick-pill {
+    font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 999px;
+  }
+  .quick-pill.dim { background: #2a2a2a; color: #ddd; }
+  .quick-pill.lit { background: #f3eee4; color: #111; }
+  .quick-input-card {
+    background: #f3eee4; color: #111; border-radius: 28px;
+    flex: 1.35; min-height: 0; position: relative;
+    padding: 18px 78px 18px 18px; margin-bottom: 12px;
+  }
+  .quick-input {
+    width: 100%; height: 100%; resize: none; border: 0; outline: 0;
+    background: transparent; color: #111; font: inherit;
+    font-size: 22px; line-height: 1.25; font-weight: 500;
+  }
+  .quick-input::placeholder { color: #9a958c; opacity: 1; }
+  .quick-stack {
+    position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+    display: flex; flex-direction: column; gap: 8px; width: 62px;
+  }
+  .quick-stack-btn {
+    appearance: none; border: 0; border-radius: 16px; padding: 10px 6px;
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    font-size: 10px; font-weight: 600;
+  }
+  .quick-stack-btn.secondary { background: #e4dfd4; color: #111; }
+  .quick-stack-btn.primary { background: #111; color: #fff; }
+  .quick-stack-btn .ui-icon svg { width: 18px; height: 18px; stroke-width: 1.8; }
+  .quick-result-card {
+    background: #f3eee4; color: #111; border-radius: 24px;
+    padding: 14px 16px 16px; margin-bottom: 12px; flex: 0.7; min-height: 0;
+  }
+  .quick-result-label {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
+    color: #8a857c; margin-bottom: 8px;
+  }
+  .quick-result-main {
+    font-size: 26px; font-weight: 700; line-height: 1.15;
+    margin-bottom: 8px; min-height: 30px;
+  }
+  .quick-result-means { font-size: 14px; color: #6b6660; line-height: 1.35; }
+  .quick-result-empty { color: #9a958c; font-size: 18px; font-weight: 600; }
+  .quick-actions {
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 14px;
+  }
+  .quick-action-btn {
+    appearance: none; background: #111; color: #fff; border: 1px solid #2a2a2a;
+    border-radius: 16px; padding: 12px 6px;
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    font-size: 11px; font-weight: 600;
+  }
+  .quick-action-btn .ui-icon svg { width: 18px; height: 18px; stroke: #fff; stroke-width: 1.7; }
+  .quick-tabs { display: flex; align-items: center; gap: 10px; padding: 4px 0 2px; }
+  .quick-tab-active {
+    flex: 1; appearance: none; border: 0; background: #f3eee4; color: #111; border-radius: 999px;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 14px; font-weight: 700; font-size: 15px;
+  }
+  .quick-tab-link {
+    appearance: none; border: 0; background: transparent; color: #eee;
+    display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 14px;
+    padding: 10px 8px;
+  }
+  .quick-tab-active .ui-icon svg, .quick-tab-link .ui-icon svg { width: 18px; height: 18px; }
 `;
 
-function wrapDocument(pageTitle, bodyHtml) {
+function wrapDocument(pageTitle, bodyHtml, bodyClass) {
+  const bodyAttrs = bodyClass ? ` class="${escapeHtml(bodyClass)}"` : "";
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -3155,7 +3372,7 @@ function wrapDocument(pageTitle, bodyHtml) {
 <title>${escapeHtml(pageTitle || "SmartTranslate")}</title>
 <style>${UI_STYLES}</style>
 </head>
-<body>${bodyHtml}</body>
+<body${bodyAttrs}>${bodyHtml}</body>
 </html>`;
 }
 
@@ -3414,34 +3631,65 @@ function buildProHomeHTML(context) {
 
 function buildV1HomeHTML(context) {
   const c = context || {};
-  const body = `<div class="app">
-    ${renderTopbar("SmartTranslate", null)}
-    <header class="hero"><div class="hero-inner">
-      <div class="hero-icon">${renderIcon("globe")}</div>
-      <div class="lang-pair">
-        <span class="lang-chip"><span class="flag">${escapeHtml(c.primaryFlag || "🌐")}</span>${escapeHtml(c.primaryLang || "")}</span>
-        <span class="lang-arrow">↔</span>
-        <span class="lang-chip"><span class="flag">${escapeHtml(c.conversationFlag || "🌐")}</span>${escapeHtml(c.conversationLang || "")}</span>
+  const primaryCode = escapeHtml(c.primaryCode || "EN");
+  const conversationCode = escapeHtml(c.conversationCode || "ES");
+  const inputText = escapeHtml(c.inputText || "");
+  const resultText = String(c.resultText || "").trim();
+  const meansText = String(c.meansText || "").trim();
+  const resultMain = resultText
+    ? escapeHtml(resultText)
+    : `<span class="quick-result-empty">Translation appears here</span>`;
+  const means = meansText ? `Means: ${meansText}` : "Means:";
+  const body = `<div class="quick-app">
+    <div class="quick-status">
+      <span>9:41</span>
+      <div class="quick-status-right"><span>••••</span><span>Wi-Fi</span><span>100%</span></div>
+    </div>
+    <div class="quick-header">
+      <div class="quick-icons">
+        <button type="button" class="quick-chrome-btn" data-action="library">${renderIcon("library")}<span>Library</span></button>
+        <button type="button" class="quick-chrome-btn" data-action="people">${renderIcon("people")}<span>People</span></button>
       </div>
-      <span class="voice-pill">${renderIcon("speaker")}<span>${escapeHtml(c.engine || "Apple Voice")}</span></span>
-    </div></header>
-    <section class="section">
-      <h2 class="section-title">Quick actions</h2>
-      <div class="tiles">
-        ${renderTile("type", "Type", "blue", "type")}
-        ${renderTile("paste", "Paste", "green", "paste")}
-        ${renderTile("dictate", "Dictate", "orange", "dictate")}
+      <div class="quick-brand-wrap">
+        <div class="quick-brand">SmartTranslate</div>
+        <div class="quick-langs">
+          <span class="quick-pill dim">${primaryCode}</span>
+          <span class="quick-pill lit">${conversationCode}</span>
+        </div>
+      </div>
+      <div class="quick-icons right">
+        <button type="button" class="quick-chrome-btn" data-action="search">${renderIcon("search")}<span>Search</span></button>
+        <button type="button" class="quick-chrome-btn" data-action="settings">${renderIcon("settings")}<span>Settings</span></button>
+      </div>
+    </div>
+
+    <section class="quick-input-card" aria-label="Quick translation input">
+      <textarea id="st-quick-input" class="quick-input" placeholder="Type or paste..." spellcheck="false">${inputText}</textarea>
+      <div class="quick-stack">
+        <button type="button" class="quick-stack-btn secondary" data-action="paste">${renderIcon("copy")}<span>Paste</span></button>
+        <button type="button" class="quick-stack-btn secondary" data-action="transcribe">${renderIcon("dictate")}<span>Transcribe</span></button>
+        <button type="button" class="quick-stack-btn primary" data-action="send">${renderIcon("send")}<span>Send</span></button>
       </div>
     </section>
-    <section class="section">
-      <h2 class="section-title">More</h2>
-      <div class="list">
-        ${renderHomeRow("conversation", "Conversation", "Multi-turn sessions", "green", "conversation")}
-        ${renderHomeRow("settings", "Settings", "Languages and API keys", "slate", "settings")}
-      </div>
+
+    <section class="quick-result-card" aria-label="Translation result">
+      <div class="quick-result-label">RESULT</div>
+      <div class="quick-result-main">${resultMain}</div>
+      <div class="quick-result-means">${escapeHtml(means)}</div>
     </section>
+
+    <div class="quick-actions">
+      <button type="button" class="quick-action-btn" data-action="copy">${renderIcon("copy")}<span>Copy</span></button>
+      <button type="button" class="quick-action-btn" data-action="dictate">${renderIcon("speaker")}<span>Dictate</span></button>
+      <button type="button" class="quick-action-btn" data-action="share">${renderIcon("share")}<span>Share</span></button>
+    </div>
+
+    <nav class="quick-tabs" aria-label="SmartTranslate modes">
+      <button type="button" class="quick-tab-active" data-action="quick">${renderIcon("pencil")}<span>Quick</span></button>
+      <button type="button" class="quick-tab-link" data-action="conversation">${renderIcon("chat")}<span>Talk</span></button>
+    </nav>
   </div>`;
-  return wrapDocument("SmartTranslate", body);
+  return wrapDocument("SmartTranslate", body, "quick-screen-body");
 }
 
 function resetSession() {
@@ -3466,6 +3714,11 @@ async function waitForTapAction(webView) {
         event.preventDefault();
         document.removeEventListener("click", handler, true);
         var action = target.getAttribute("data-action") || "";
+        if (action === "send") {
+          var input = document.getElementById("st-quick-input");
+          completion(JSON.stringify({ a: action, v: input ? input.value : "" }));
+          return;
+        }
         completion(String(action));
       }
       document.addEventListener("click", handler, true);
@@ -3660,15 +3913,18 @@ async function presentProHome(context) {
   if (!parsed) {
     return null;
   }
-  if (parsed.a === "continue") {
-    return "conversation";
-  }
   return parsed.a;
 }
 
 async function presentV1Home(context) {
   const raw = await presentScreen(buildV1HomeHTML(context));
   const parsed = parseCompletion(raw);
+  if (parsed && parsed.a === "send") {
+    return {
+      action: "send",
+      text: String(parsed.v || "")
+    };
+  }
   return parsed ? parsed.a : null;
 }
 return {
@@ -3747,6 +4003,12 @@ async function runProAction(action, config) {
       break;
     case "dictate":
       await runDictate(config);
+      break;
+    case "continue":
+      await Conversation.runConversation(config, {
+        onCompleted: Pro.processCompletedSession,
+        forceAction: "continue"
+      });
       break;
     case "conversation":
       await Conversation.runConversation(config, {

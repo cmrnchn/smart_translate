@@ -85,6 +85,12 @@ async function runProAction(action, config) {
     case "dictate":
       await runDictate(config);
       break;
+    case "continue":
+      await Conversation.runConversation(config, {
+        onCompleted: Pro.processCompletedSession,
+        forceAction: "continue"
+      });
+      break;
     case "conversation":
       await Conversation.runConversation(config, {
         onCompleted: Pro.processCompletedSession
