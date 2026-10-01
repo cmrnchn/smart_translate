@@ -2219,8 +2219,12 @@ const ICON_PATHS = {
     '<rect x="4" y="7" width="16" height="10" rx="2.5"/><path d="M8 11h8M8 14.5h5"/>',
   paste:
     '<rect x="7" y="5" width="11" height="14" rx="2"/><path d="M9 5V4.5A1.5 1.5 0 0 1 10.5 3h5A1.5 1.5 0 0 1 17 4.5V5"/><path d="M9.5 12h7M9.5 15h4"/>',
+  copy:
+    '<rect x="9" y="9" width="10" height="10" rx="2"/><path d="M5 15.5V6.5A1.5 1.5 0 0 1 6.5 5H15"/>',
   dictate:
     '<rect x="9.5" y="4" width="5" height="9" rx="2.5"/><path d="M6.5 11.5a5.5 5.5 0 0 0 11 0M12 17v3"/>',
+  send:
+    '<path d="M20 4L9.5 14.5"/><path d="M20 4l-6.5 16-4-8.5L4 9l16-5z"/>',
   library:
     '<path d="M5 6.5h5v11H5zM14 6.5h5v11h-5z"/><path d="M7.5 9h0M16.5 9h0M7.5 12h0M16.5 12h0"/>',
   people:
@@ -2237,7 +2241,7 @@ const ICON_PATHS = {
     '<path d="M12 4.5l1.6 3.6 3.9.4-2.9 2.6.9 3.8-3.5-2.1-3.5 2.1.9-3.8-2.9-2.6 3.9-.4z"/>',
   list: '<path d="M6 7.5h12M6 12h12M6 16.5h12"/>',
   share:
-    '<path d="M12 4.5v11M8.5 8l3.5-3.5L15.5 8"/><rect x="5" y="15.5" width="14" height="4" rx="1.2"/>',
+    '<circle cx="18" cy="5" r="2.8"/><circle cx="6" cy="12" r="2.8"/><circle cx="18" cy="19" r="2.8"/><path d="M8.5 13.4l7 4.2M15.5 6.4l-7 4.2"/>',
   person:
     '<circle cx="12" cy="9" r="3"/><path d="M5.5 18.5c.9-2.8 3-4.5 6.5-4.5s5.6 1.7 6.5 4.5"/>',
   "person-add":
@@ -2513,9 +2517,104 @@ const UI_STYLES = `
     word-break: break-all; margin-bottom: 12px;
   }
   .key-actions { display: flex; flex-direction: column; gap: 8px; }
+  body.quick-screen-body {
+    width: 100%; min-height: 100vh; height: 100vh; overflow: hidden;
+    background: #000; color: #fff;
+    padding: 0 14px calc(env(safe-area-inset-bottom, 0px) + 18px);
+    display: flex; flex-direction: column;
+  }
+  .quick-app {
+    width: 100%; max-width: 390px; min-height: 100%; margin: 0 auto;
+    display: flex; flex-direction: column;
+  }
+  .quick-status {
+    height: 54px; display: flex; align-items: flex-end; justify-content: space-between;
+    padding: 0 8px 8px; font-size: 15px; font-weight: 600;
+  }
+  .quick-status-right { display: flex; gap: 6px; align-items: center; font-size: 13px; }
+  .quick-header {
+    display: grid; grid-template-columns: 72px 1fr 72px; align-items: center;
+    gap: 4px; margin-bottom: 10px;
+  }
+  .quick-icons { display: flex; gap: 14px; align-items: center; min-width: 0; }
+  .quick-icons.right { justify-content: flex-end; }
+  .quick-chrome-btn {
+    appearance: none; border: 0; background: transparent; color: #cfcfcf;
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    padding: 0; font-size: 8px; letter-spacing: 0.02em;
+  }
+  .quick-chrome-btn .ui-icon svg { width: 20px; height: 20px; stroke: #fff; stroke-width: 1.7; }
+  .quick-brand-wrap { text-align: center; min-width: 0; }
+  .quick-brand { font-size: 17px; font-weight: 700; letter-spacing: -0.02em; }
+  .quick-langs { display: flex; justify-content: center; gap: 6px; margin-top: 6px; }
+  .quick-pill {
+    font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 999px;
+  }
+  .quick-pill.dim { background: #2a2a2a; color: #ddd; }
+  .quick-pill.lit { background: #f3eee4; color: #111; }
+  .quick-input-card {
+    background: #f3eee4; color: #111; border-radius: 28px;
+    flex: 1.35; min-height: 0; position: relative;
+    padding: 18px 78px 18px 18px; margin-bottom: 12px;
+  }
+  .quick-input {
+    width: 100%; height: 100%; resize: none; border: 0; outline: 0;
+    background: transparent; color: #111; font: inherit;
+    font-size: 22px; line-height: 1.25; font-weight: 500;
+  }
+  .quick-input::placeholder { color: #9a958c; opacity: 1; }
+  .quick-stack {
+    position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+    display: flex; flex-direction: column; gap: 8px; width: 62px;
+  }
+  .quick-stack-btn {
+    appearance: none; border: 0; border-radius: 16px; padding: 10px 6px;
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    font-size: 10px; font-weight: 600;
+  }
+  .quick-stack-btn.secondary { background: #e4dfd4; color: #111; }
+  .quick-stack-btn.primary { background: #111; color: #fff; }
+  .quick-stack-btn .ui-icon svg { width: 18px; height: 18px; stroke-width: 1.8; }
+  .quick-result-card {
+    background: #f3eee4; color: #111; border-radius: 24px;
+    padding: 14px 16px 16px; margin-bottom: 12px; flex: 0.7; min-height: 0;
+  }
+  .quick-result-label {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
+    color: #8a857c; margin-bottom: 8px;
+  }
+  .quick-result-main {
+    font-size: 26px; font-weight: 700; line-height: 1.15;
+    margin-bottom: 8px; min-height: 30px;
+  }
+  .quick-result-means { font-size: 14px; color: #6b6660; line-height: 1.35; }
+  .quick-result-empty { color: #9a958c; font-size: 18px; font-weight: 600; }
+  .quick-actions {
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 14px;
+  }
+  .quick-action-btn {
+    appearance: none; background: #111; color: #fff; border: 1px solid #2a2a2a;
+    border-radius: 16px; padding: 12px 6px;
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    font-size: 11px; font-weight: 600;
+  }
+  .quick-action-btn .ui-icon svg { width: 18px; height: 18px; stroke: #fff; stroke-width: 1.7; }
+  .quick-tabs { display: flex; align-items: center; gap: 10px; padding: 4px 0 2px; }
+  .quick-tab-active {
+    flex: 1; appearance: none; border: 0; background: #f3eee4; color: #111; border-radius: 999px;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 14px; font-weight: 700; font-size: 15px;
+  }
+  .quick-tab-link {
+    appearance: none; border: 0; background: transparent; color: #eee;
+    display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 14px;
+    padding: 10px 8px;
+  }
+  .quick-tab-active .ui-icon svg, .quick-tab-link .ui-icon svg { width: 18px; height: 18px; }
 `;
 
-function wrapDocument(pageTitle, bodyHtml) {
+function wrapDocument(pageTitle, bodyHtml, bodyClass) {
+  const bodyAttrs = bodyClass ? ` class="${escapeHtml(bodyClass)}"` : "";
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2525,7 +2624,7 @@ function wrapDocument(pageTitle, bodyHtml) {
 <title>${escapeHtml(pageTitle || "SmartTranslate")}</title>
 <style>${UI_STYLES}</style>
 </head>
-<body>${bodyHtml}</body>
+<body${bodyAttrs}>${bodyHtml}</body>
 </html>`;
 }
 
@@ -2784,34 +2883,65 @@ function buildProHomeHTML(context) {
 
 function buildV1HomeHTML(context) {
   const c = context || {};
-  const body = `<div class="app">
-    ${renderTopbar("SmartTranslate", null)}
-    <header class="hero"><div class="hero-inner">
-      <div class="hero-icon">${renderIcon("globe")}</div>
-      <div class="lang-pair">
-        <span class="lang-chip"><span class="flag">${escapeHtml(c.primaryFlag || "🌐")}</span>${escapeHtml(c.primaryLang || "")}</span>
-        <span class="lang-arrow">↔</span>
-        <span class="lang-chip"><span class="flag">${escapeHtml(c.conversationFlag || "🌐")}</span>${escapeHtml(c.conversationLang || "")}</span>
+  const primaryCode = escapeHtml(c.primaryCode || "EN");
+  const conversationCode = escapeHtml(c.conversationCode || "ES");
+  const inputText = escapeHtml(c.inputText || "");
+  const resultText = String(c.resultText || "").trim();
+  const meansText = String(c.meansText || "").trim();
+  const resultMain = resultText
+    ? escapeHtml(resultText)
+    : `<span class="quick-result-empty">Translation appears here</span>`;
+  const means = meansText ? `Means: ${meansText}` : "Means:";
+  const body = `<div class="quick-app">
+    <div class="quick-status">
+      <span>9:41</span>
+      <div class="quick-status-right"><span>••••</span><span>Wi-Fi</span><span>100%</span></div>
+    </div>
+    <div class="quick-header">
+      <div class="quick-icons">
+        <button type="button" class="quick-chrome-btn" data-action="library">${renderIcon("library")}<span>Library</span></button>
+        <button type="button" class="quick-chrome-btn" data-action="people">${renderIcon("people")}<span>People</span></button>
       </div>
-      <span class="voice-pill">${renderIcon("speaker")}<span>${escapeHtml(c.engine || "Apple Voice")}</span></span>
-    </div></header>
-    <section class="section">
-      <h2 class="section-title">Quick actions</h2>
-      <div class="tiles">
-        ${renderTile("type", "Type", "blue", "type")}
-        ${renderTile("paste", "Paste", "green", "paste")}
-        ${renderTile("dictate", "Dictate", "orange", "dictate")}
+      <div class="quick-brand-wrap">
+        <div class="quick-brand">SmartTranslate</div>
+        <div class="quick-langs">
+          <span class="quick-pill dim">${primaryCode}</span>
+          <span class="quick-pill lit">${conversationCode}</span>
+        </div>
+      </div>
+      <div class="quick-icons right">
+        <button type="button" class="quick-chrome-btn" data-action="search">${renderIcon("search")}<span>Search</span></button>
+        <button type="button" class="quick-chrome-btn" data-action="settings">${renderIcon("settings")}<span>Settings</span></button>
+      </div>
+    </div>
+
+    <section class="quick-input-card" aria-label="Quick translation input">
+      <textarea id="st-quick-input" class="quick-input" placeholder="Type or paste..." spellcheck="false">${inputText}</textarea>
+      <div class="quick-stack">
+        <button type="button" class="quick-stack-btn secondary" data-action="paste">${renderIcon("copy")}<span>Paste</span></button>
+        <button type="button" class="quick-stack-btn secondary" data-action="transcribe">${renderIcon("dictate")}<span>Transcribe</span></button>
+        <button type="button" class="quick-stack-btn primary" data-action="send">${renderIcon("send")}<span>Send</span></button>
       </div>
     </section>
-    <section class="section">
-      <h2 class="section-title">More</h2>
-      <div class="list">
-        ${renderHomeRow("conversation", "Conversation", "Multi-turn sessions", "green", "conversation")}
-        ${renderHomeRow("settings", "Settings", "Languages and API keys", "slate", "settings")}
-      </div>
+
+    <section class="quick-result-card" aria-label="Translation result">
+      <div class="quick-result-label">RESULT</div>
+      <div class="quick-result-main">${resultMain}</div>
+      <div class="quick-result-means">${escapeHtml(means)}</div>
     </section>
+
+    <div class="quick-actions">
+      <button type="button" class="quick-action-btn" data-action="copy">${renderIcon("copy")}<span>Copy</span></button>
+      <button type="button" class="quick-action-btn" data-action="dictate">${renderIcon("speaker")}<span>Dictate</span></button>
+      <button type="button" class="quick-action-btn" data-action="share">${renderIcon("share")}<span>Share</span></button>
+    </div>
+
+    <nav class="quick-tabs" aria-label="SmartTranslate modes">
+      <button type="button" class="quick-tab-active" data-action="quick">${renderIcon("pencil")}<span>Quick</span></button>
+      <button type="button" class="quick-tab-link" data-action="conversation">${renderIcon("chat")}<span>Talk</span></button>
+    </nav>
   </div>`;
-  return wrapDocument("SmartTranslate", body);
+  return wrapDocument("SmartTranslate", body, "quick-screen-body");
 }
 
 function resetSession() {
@@ -2836,6 +2966,11 @@ async function waitForTapAction(webView) {
         event.preventDefault();
         document.removeEventListener("click", handler, true);
         var action = target.getAttribute("data-action") || "";
+        if (action === "send") {
+          var input = document.getElementById("st-quick-input");
+          completion(JSON.stringify({ a: action, v: input ? input.value : "" }));
+          return;
+        }
         completion(String(action));
       }
       document.addEventListener("click", handler, true);
@@ -3036,6 +3171,12 @@ async function presentProHome(context) {
 async function presentV1Home(context) {
   const raw = await presentScreen(buildV1HomeHTML(context));
   const parsed = parseCompletion(raw);
+  if (parsed && parsed.a === "send") {
+    return {
+      action: "send",
+      text: String(parsed.v || "")
+    };
+  }
   return parsed ? parsed.a : null;
 }
 return {
@@ -3065,10 +3206,9 @@ return {
 // SmartTranslate v1 entry script for Scriptable.
 //
 // Menu:
-//   Type         → type text, translate once, speak
-//   Paste        → clipboard → translate once → speak
+//   Quick        → type/paste/transcribe, then send to translate
 //   Dictate      → speech → translate once → speak
-//   Conversation → multi-turn session (separate module)
+//   Talk         → multi-turn session (separate module)
 //   Settings     → languages, API keys, speech engine
 //
 // Requires (same Scriptable folder):
@@ -3096,6 +3236,10 @@ return {
 
 async function main() {
   let config = await Shared.loadConfig();
+  const quickState = {
+    inputText: "",
+    result: null
+  };
 
   if (!config || !config.version) {
     const isFirstRun = !config;
@@ -3114,23 +3258,49 @@ async function main() {
   }
 
   while (true) {
-    const action = await showMainMenu(config);
+    const action = await showMainMenu(config, quickState);
     if (!action || action === "cancel") {
       break;
     }
 
-    switch (action) {
+    const actionId = typeof action === "object" ? action.action : action;
+    switch (actionId) {
       case "type":
-        await runType(config);
+        await runType(quickState);
         break;
       case "paste":
-        await runPaste(config);
+        await runPaste(quickState);
+        break;
+      case "transcribe":
+        await runTranscribe(config, quickState);
+        break;
+      case "send":
+        await runSend(
+          typeof action === "object" ? action.text : quickState.inputText,
+          config,
+          quickState
+        );
         break;
       case "dictate":
-        await runDictate(config);
+        await runDictate(config, quickState);
+        break;
+      case "copy":
+        await runCopy(quickState);
+        break;
+      case "share":
+        await runShare(quickState);
+        break;
+      case "library":
+        await Conversation.runConversation(config, { forceAction: "history" });
+        break;
+      case "people":
+      case "search":
+        await showProSurfaceMessage(actionId);
         break;
       case "conversation":
         await Conversation.runConversation(config);
+        break;
+      case "quick":
         break;
       case "settings": {
         const updated = await runSettingsMenu(config);
@@ -3149,18 +3319,17 @@ async function main() {
 // MAIN MENU
 // ============================================================
 
-async function showMainMenu(config) {
+async function showMainMenu(config, quickState) {
   const engine = config.speech.engine === "apple" ? "Apple Voice" : "ElevenLabs";
   const context = {
     primaryLang: Shared.getLanguageDisplayName(config.languages.primary),
     conversationLang: Shared.getLanguageDisplayName(config.languages.conversation),
-    primaryFlag: UI?.flagForCode
-      ? UI.flagForCode(config.languages.primary)
-      : "🌐",
-    conversationFlag: UI?.flagForCode
-      ? UI.flagForCode(config.languages.conversation)
-      : "🌐",
-    engine
+    primaryCode: Shared.normalizeLanguage(config.languages.primary),
+    conversationCode: Shared.normalizeLanguage(config.languages.conversation),
+    engine,
+    inputText: quickState.inputText,
+    resultText: quickState.result?.translatedText || "",
+    meansText: quickState.result?.sourceText || ""
   };
 
   if (UI?.presentV1Home) {
@@ -3177,17 +3346,19 @@ async function showMainMenu(config) {
     subtitle: `${context.primaryLang} ↔ ${context.conversationLang} · ${engine}`,
     sections: [
       {
-        header: "Translate",
+        header: "Quick",
         rows: [
-          { id: "type", title: "Type", subtitle: "Enter text", symbol: "keyboard" },
-          { id: "paste", title: "Paste", subtitle: "From clipboard", symbol: "doc.on.clipboard" },
-          { id: "dictate", title: "Dictate", subtitle: "Speak to translate", symbol: "mic" }
+          { id: "type", title: "Type", subtitle: "Edit input text", symbol: "keyboard" },
+          { id: "paste", title: "Paste", subtitle: "Fill input from clipboard", symbol: "doc.on.clipboard" },
+          { id: "transcribe", title: "Transcribe", subtitle: "Speech into input", symbol: "mic" },
+          { id: "send", title: "Send", subtitle: "Translate current input", symbol: "character.bubble" },
+          { id: "dictate", title: "Dictate", subtitle: "Speech translates immediately", symbol: "speaker" }
         ]
       },
       {
-        header: "More",
+        header: "Talk",
         rows: [
-          { id: "conversation", title: "Conversation", subtitle: "Multi-turn sessions", symbol: "person.2" },
+          { id: "conversation", title: "Talk", subtitle: "Multi-turn sessions", symbol: "person.2" },
           { id: "settings", title: "Settings", subtitle: "Languages and keys", symbol: "gearshape" }
         ]
       }
@@ -3201,39 +3372,112 @@ async function showMainMenu(config) {
 // ONE-SHOT WORKFLOWS
 // ============================================================
 
-async function runType(config) {
+async function runType(quickState) {
   const text = await Shared.promptForText(
     "Type",
-    "Enter the text to translate."
+    "Enter text for Quick mode.",
+    quickState.inputText || ""
   );
   if (text === null) {
     return;
   }
-  await Shared.runOneShot(text, config);
+  quickState.inputText = text;
 }
 
-async function runPaste(config) {
+async function runPaste(quickState) {
   const text = Pasteboard.paste() || "";
   if (!text.trim()) {
     await Shared.showError("Clipboard is empty.");
     return;
   }
-  await Shared.runOneShot(text, config);
+  quickState.inputText = text;
 }
 
-async function runDictate(config) {
+async function runTranscribe(config, quickState) {
   try {
     const text = await Shared.dictateText(config);
     if (!text || !text.trim()) {
       await Shared.showError("No speech was captured.");
       return;
     }
-    await Shared.runOneShot(text, config);
+    quickState.inputText = text;
+  } catch (error) {
+    await Shared.showError(
+      `Transcription failed.\n\n${error?.message || "Unknown error."}`
+    );
+  }
+}
+
+async function runSend(text, config, quickState) {
+  const sourceText = String(text || "").trim();
+  quickState.inputText = text || "";
+  if (!sourceText) {
+    await Shared.showError("Please enter some text to translate.");
+    return;
+  }
+
+  const result = await Shared.runOneShot(sourceText, config);
+  if (result) {
+    storeQuickResult(quickState, sourceText, result);
+  }
+}
+
+async function runDictate(config, quickState) {
+  try {
+    const text = await Shared.dictateText(config);
+    if (!text || !text.trim()) {
+      await Shared.showError("No speech was captured.");
+      return;
+    }
+    const result = await Shared.runOneShot(text, config);
+    if (result) {
+      storeQuickResult(quickState, text.trim(), result);
+    }
   } catch (error) {
     await Shared.showError(
       `Dictation failed.\n\n${error?.message || "Unknown error."}`
     );
   }
+}
+
+function storeQuickResult(quickState, sourceText, result) {
+  quickState.result = {
+    sourceText,
+    translatedText: result.translation
+  };
+  quickState.inputText = "";
+}
+
+async function runCopy(quickState) {
+  const text = quickState.result?.translatedText || "";
+  if (!text) {
+    await Shared.showError("No translation to copy yet.");
+    return;
+  }
+  Pasteboard.copy(text);
+  await Shared.showSuccess("Copied", "Translation copied to the clipboard.");
+}
+
+async function runShare(quickState) {
+  const text = quickState.result?.translatedText || "";
+  if (!text) {
+    await Shared.showError("No translation to share yet.");
+    return;
+  }
+  if (typeof ShareSheet !== "undefined" && ShareSheet.present) {
+    await ShareSheet.present([text]);
+    return;
+  }
+  Pasteboard.copy(text);
+  await Shared.showSuccess("Copied", "Sharing is unavailable here, so the translation was copied.");
+}
+
+async function showProSurfaceMessage(actionId) {
+  const label = actionId === "people" ? "People" : "Library search";
+  await Shared.showSuccess(
+    label,
+    `${label} lives in SmartTranslate Pro. Open SmartTranslatePro to use it.`
+  );
 }
 
 // ============================================================
