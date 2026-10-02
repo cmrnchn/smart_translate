@@ -2548,9 +2548,22 @@ const UI_STYLES = `
   .quick-brand-line {
     display: flex; align-items: center; justify-content: center; gap: 6px;
   }
-  .quick-logo-bubble { color: #fff; line-height: 0; }
-  .quick-logo-bubble .ui-icon svg { width: 17px; height: 17px; stroke-width: 1.8; }
-  .quick-logo-bubble.right .ui-icon svg { transform: scaleX(-1); }
+  .quick-logo-bubble {
+    position: relative; min-width: 28px; height: 21px; padding: 0 5px;
+    border: 1.6px solid #fff; border-radius: 7px; background: #000; color: #fff;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 10px; line-height: 1; font-weight: 800; letter-spacing: 0.02em;
+  }
+  .quick-logo-bubble::after {
+    content: ""; position: absolute; bottom: 3px; width: 6px; height: 6px;
+    background: #000; border-color: #fff; border-style: solid;
+  }
+  .quick-logo-bubble.left::after {
+    left: -4px; border-width: 0 0 1.6px 1.6px; transform: rotate(45deg);
+  }
+  .quick-logo-bubble.right::after {
+    right: -4px; border-width: 1.6px 1.6px 0 0; transform: rotate(45deg);
+  }
   .quick-brand { font-size: 17px; font-weight: 700; letter-spacing: -0.02em; }
   .quick-langs { display: flex; justify-content: center; gap: 6px; margin-top: 6px; }
   .quick-pill {
@@ -2910,9 +2923,9 @@ function buildV1HomeHTML(context) {
       </div>
       <div class="quick-brand-wrap">
         <div class="quick-brand-line">
-          <span class="quick-logo-bubble left">${renderIcon("chat")}</span>
+          <span class="quick-logo-bubble left">${primaryCode}</span>
           <div class="quick-brand">SmartTranslate</div>
-          <span class="quick-logo-bubble right">${renderIcon("chat")}</span>
+          <span class="quick-logo-bubble right">${conversationCode}</span>
         </div>
         <div class="quick-langs">
           <span class="quick-pill dim">${primaryCode}</span>
