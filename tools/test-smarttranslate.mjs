@@ -146,8 +146,11 @@ function testWebViewHtml() {
   });
   assertIncludes("v1 home has Quick tab", v1Html, ">Quick</span>");
   assertIncludes("v1 home has Talk tab", v1Html, ">Talk</span>");
-  assertIncludes("v1 home has source code logo bubble", v1Html, '<span class="quick-logo-bubble left">EN</span>');
-  assertIncludes("v1 home has target code logo bubble", v1Html, '<span class="quick-logo-bubble right">ES</span>');
+  assertIncludes("v1 home has source code logo bubble", v1Html, 'quick-logo-bubble left');
+  assertIncludes("v1 home has source code inside logo bubble", v1Html, 'quick-logo-bubble-code">EN</span>');
+  assertIncludes("v1 home has target code logo bubble", v1Html, 'quick-logo-bubble right');
+  assertIncludes("v1 home has target code inside logo bubble", v1Html, 'quick-logo-bubble-code">ES</span>');
+  assertIncludes("v1 home separates input actions from textbox", v1Html, 'class="quick-input-row"');
   assertIncludes("v1 home has paste stack action", v1Html, 'data-action="paste"');
   assertIncludes("v1 home has transcribe stack action", v1Html, 'data-action="transcribe"');
   assertIncludes("v1 home has send stack action", v1Html, 'data-action="send"');

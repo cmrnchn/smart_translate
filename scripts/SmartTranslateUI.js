@@ -363,20 +363,17 @@ const UI_STYLES = `
     display: flex; align-items: center; justify-content: center; gap: 6px;
   }
   .quick-logo-bubble {
-    position: relative; min-width: 28px; height: 21px; padding: 0 5px;
-    border: 1.6px solid #fff; border-radius: 7px; background: #000; color: #fff;
+    position: relative; width: 32px; height: 24px; color: #fff;
     display: inline-flex; align-items: center; justify-content: center;
+  }
+  .quick-logo-bubble svg {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    stroke: #fff; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+  }
+  .quick-logo-bubble.right svg { transform: scaleX(-1); transform-origin: center; }
+  .quick-logo-bubble-code {
+    position: relative; z-index: 1;
     font-size: 10px; line-height: 1; font-weight: 800; letter-spacing: 0.02em;
-  }
-  .quick-logo-bubble::after {
-    content: ""; position: absolute; bottom: 3px; width: 6px; height: 6px;
-    background: #000; border-color: #fff; border-style: solid;
-  }
-  .quick-logo-bubble.left::after {
-    left: -4px; border-width: 0 0 1.6px 1.6px; transform: rotate(45deg);
-  }
-  .quick-logo-bubble.right::after {
-    right: -4px; border-width: 1.6px 1.6px 0 0; transform: rotate(45deg);
   }
   .quick-brand { font-size: 17px; font-weight: 700; letter-spacing: -0.02em; }
   .quick-langs { display: flex; justify-content: center; gap: 6px; margin-top: 6px; }
@@ -385,10 +382,14 @@ const UI_STYLES = `
   }
   .quick-pill.dim { background: #2a2a2a; color: #ddd; }
   .quick-pill.lit { background: #f3eee4; color: #111; }
+  .quick-input-row {
+    display: flex; align-items: stretch; gap: 8px;
+    flex: 1.35; min-height: 0; margin-bottom: 12px;
+  }
   .quick-input-card {
     background: #f3eee4; color: #111; border-radius: 28px;
-    flex: 1.35; min-height: 0; position: relative;
-    padding: 18px 78px 18px 18px; margin-bottom: 12px;
+    flex: 1; min-width: 0; min-height: 0; position: relative;
+    padding: 18px;
   }
   .quick-input {
     width: 100%; height: 100%; resize: none; border: 0; outline: 0;
@@ -397,12 +398,11 @@ const UI_STYLES = `
   }
   .quick-input::placeholder { color: #9a958c; opacity: 1; }
   .quick-stack {
-    position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
-    display: flex; flex-direction: column; gap: 8px; width: 62px;
+    display: flex; flex-direction: column; gap: 8px; width: 72px; min-height: 0;
   }
   .quick-stack-btn {
-    appearance: none; border: 0; border-radius: 16px; padding: 10px 6px;
-    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    appearance: none; border: 0; border-radius: 16px; padding: 8px 6px; flex: 1; min-height: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
     font-size: 10px; font-weight: 600;
   }
   .quick-stack-btn.secondary { background: #e4dfd4; color: #111; }
@@ -656,6 +656,12 @@ function renderHomeRow(action, title, subtitle, tint, iconId) {
   return `<button type="button" class="list-row" data-action="${escapeHtml(action)}"><span class="row-icon ${escapeHtml(tint)}">${renderIcon(iconId)}</span><span class="row-text"><span class="row-title">${escapeHtml(title)}</span><span class="row-sub">${escapeHtml(subtitle)}</span></span><span class="chevron">›</span></button>`;
 }
 
+function renderLogoBubble(code, side) {
+  const text = escapeHtml(code || "");
+  const path = "M8 5h18c4 0 7 3 7 7v3c0 4-3 7-7 7H14l-8 5v-5H8c-4 0-7-3-7-7v-3c0-4 3-7 7-7z";
+  return `<span class="quick-logo-bubble ${escapeHtml(side)}" aria-label="${text} language bubble"><svg viewBox="-1 0 36 30" aria-hidden="true"><path d="${path}"/></svg><span class="quick-logo-bubble-code">${text}</span></span>`;
+}
+
 function buildProHomeHTML(context) {
   const c = context || {};
   const primaryFlag = escapeHtml(c.primaryFlag || "🌐");
@@ -737,9 +743,9 @@ function buildV1HomeHTML(context) {
       </div>
       <div class="quick-brand-wrap">
         <div class="quick-brand-line">
-          <span class="quick-logo-bubble left">${primaryCode}</span>
+          ${renderLogoBubble(primaryCode, "left")}
           <div class="quick-brand">SmartTranslate</div>
-          <span class="quick-logo-bubble right">${conversationCode}</span>
+          ${renderLogoBubble(conversationCode, "right")}
         </div>
         <div class="quick-langs">
           <span class="quick-pill dim">${primaryCode}</span>
@@ -752,8 +758,10 @@ function buildV1HomeHTML(context) {
       </div>
     </div>
 
-    <section class="quick-input-card" aria-label="Quick translation input">
-      <textarea id="st-quick-input" class="quick-input" placeholder="Type or paste..." spellcheck="false">${inputText}</textarea>
+    <section class="quick-input-row" aria-label="Quick translation input">
+      <div class="quick-input-card">
+        <textarea id="st-quick-input" class="quick-input" placeholder="Type or paste..." spellcheck="false">${inputText}</textarea>
+      </div>
       <div class="quick-stack">
         <button type="button" class="quick-stack-btn secondary" data-action="paste">${renderIcon("copy")}<span>Paste</span></button>
         <button type="button" class="quick-stack-btn secondary" data-action="transcribe">${renderIcon("dictate")}<span>Transcribe</span></button>
