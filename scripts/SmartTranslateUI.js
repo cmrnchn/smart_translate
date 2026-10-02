@@ -359,6 +359,12 @@ const UI_STYLES = `
   }
   .quick-chrome-btn .ui-icon svg { width: 20px; height: 20px; stroke: #fff; stroke-width: 1.7; }
   .quick-brand-wrap { text-align: center; min-width: 0; }
+  .quick-brand-line {
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .quick-logo-bubble { color: #fff; line-height: 0; }
+  .quick-logo-bubble .ui-icon svg { width: 17px; height: 17px; stroke-width: 1.8; }
+  .quick-logo-bubble.right .ui-icon svg { transform: scaleX(-1); }
   .quick-brand { font-size: 17px; font-weight: 700; letter-spacing: -0.02em; }
   .quick-langs { display: flex; justify-content: center; gap: 6px; margin-top: 6px; }
   .quick-pill {
@@ -717,7 +723,11 @@ function buildV1HomeHTML(context) {
         <button type="button" class="quick-chrome-btn" data-action="people">${renderIcon("people")}<span>People</span></button>
       </div>
       <div class="quick-brand-wrap">
-        <div class="quick-brand">SmartTranslate</div>
+        <div class="quick-brand-line">
+          <span class="quick-logo-bubble left">${renderIcon("chat")}</span>
+          <div class="quick-brand">SmartTranslate</div>
+          <span class="quick-logo-bubble right">${renderIcon("chat")}</span>
+        </div>
         <div class="quick-langs">
           <span class="quick-pill dim">${primaryCode}</span>
           <span class="quick-pill lit">${conversationCode}</span>
