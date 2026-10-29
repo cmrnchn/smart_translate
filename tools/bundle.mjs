@@ -65,8 +65,10 @@ const BUNDLE_TAIL = `try {
 } catch (error) {
   try {
     const alert = new Alert();
-    alert.title = "SmartTranslate Error";
-    alert.message = String(error?.message || error || "Unknown error.");
+    alert.title = "Couldn't finish translating";
+    alert.message =
+      "Check your connection and keys, then run SmartTranslate again.\\n\\n" +
+      String(error?.message || error || "Unknown error.");
     alert.addAction("OK");
     await alert.presentAlert();
   } catch (alertError) {

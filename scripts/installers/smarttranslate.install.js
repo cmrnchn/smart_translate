@@ -133,7 +133,7 @@ async function downloadSource(item) {
   const status = request.response?.statusCode;
   if (status && (status < 200 || status >= 300)) {
     throw new Error(
-      `${item.label || item.scriptName} download failed (HTTP ${status}). Nothing was saved. Check the URL and try again.`
+      `${item.label || item.scriptName} download failed. Nothing was saved. Check your connection and run the installer again.\n\nCode ${status}`
     );
   }
   validateSource(text, item);
