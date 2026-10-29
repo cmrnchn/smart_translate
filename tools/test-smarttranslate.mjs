@@ -10,6 +10,7 @@
 import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
+import vm from "vm";
 import { fileURLToPath } from "url";
 import { loadScriptableModule } from "./load-scriptable-module.mjs";
 
@@ -278,6 +279,77 @@ function testBundleRegressionGuards() {
   assertIncludes("Pro has WebView fallback", read("scripts/SmartTranslatePro.js"), "showMainMenuFallback");
 }
 
+async function testBundleTailCompletes() {
+  console.log("\nBundle tail (main throws)");
+  for (const rel of ["scripts/dist/SmartTranslate.js", "scripts/dist/SmartTranslatePro.js"]) {
+    const code = `(async()=>{ ${read(rel)} })()`;
+    let completed = false;
+    const alerts = [];
+    class Alert {
+      addAction() {}
+      async presentAlert() { alerts.push(`${this.title} | ${this.message}`); return 0; }
+    }
+    const ctx = {
+      console: { ...console, error() {} },
+      Alert,
+      Script: { complete() { completed = true; }, setShortcutOutput() {} },
+      FileManager: {
+        iCloud() { throw new Error("iCloud is not enabled for Scriptable"); },
+        local() { throw new Error("boom from main"); }
+      }
+    };
+    let rejected = null;
+    try {
+      await vm.runInNewContext(code, ctx);
+    } catch (error) {
+      rejected = error;
+    }
+    if (rejected) {
+      fail(`${rel} main() error is caught`, rejected.message);
+    } else {
+      ok(`${rel} main() error is caught`);
+    }
+    if (completed) ok(`${rel} Script.complete runs when main throws`);
+    else fail(`${rel} Script.complete runs when main throws`, "not called");
+    if (alerts.length === 1 && alerts[0].includes("boom from main")) ok(`${rel} shows error alert`);
+    else fail(`${rel} shows error alert`, JSON.stringify(alerts));
+  }
+}
+
+function makeFm(kind) {
+  return {
+    kind,
+    documentsDirectory() { return `/${kind}/Documents`; },
+    joinPath(a, b) { return `${a}/${b}`; },
+    fileExists() { return true; },
+    createDirectory() {}
+  };
+}
+
+function testFileManagerFallback() {
+  console.log("\nStorage fallback (iCloud → local)");
+  const cases = [
+    ["scripts/SmartTranslateShared.js", (g) => loadScriptableModule("scripts/SmartTranslateShared.js", g).getFileManager()],
+    ["scripts/ScriptInstall.runtime.js", (g) => {
+      const code = read("scripts/ScriptInstall.runtime.js").replace(/try \{\s*await main\(\);[\s\S]*$/, "");
+      const ctx = { ...g, INSTALLER: { items: [] } };
+      vm.runInNewContext(code + "\nthis.__fm = getFileManager();", ctx);
+      return ctx.__fm;
+    }]
+  ];
+  for (const [rel, getFm] of cases) {
+    const available = getFm({ FileManager: { iCloud: () => makeFm("icloud"), local: () => makeFm("local") } });
+    if (available?.kind === "icloud") ok(`${rel} uses iCloud when available`);
+    else fail(`${rel} uses iCloud when available`, `got ${available?.kind}`);
+    const throwing = getFm({ FileManager: { iCloud: () => { throw new Error("iCloud is not enabled"); }, local: () => makeFm("local") } });
+    if (throwing?.kind === "local") ok(`${rel} falls back to local when iCloud throws`);
+    else fail(`${rel} falls back to local when iCloud throws`, `got ${throwing?.kind}`);
+    const noDocs = getFm({ FileManager: { iCloud: () => ({ ...makeFm("icloud"), documentsDirectory() { throw new Error("no iCloud docs"); } }), local: () => makeFm("local") } });
+    if (noDocs?.kind === "local") ok(`${rel} falls back to local when iCloud docs unavailable`);
+    else fail(`${rel} falls back to local when iCloud docs unavailable`, `got ${noDocs?.kind}`);
+  }
+}
+
 function testOptionalDeepL() {
   console.log("\nDeepL (optional)");
   const key = process.env.DEEPL_API_KEY || "";
@@ -309,6 +381,8 @@ async function main() {
   await testWebViewPresentOrder();
   await testV1SendPayload();
   testBundleRegressionGuards();
+  await testBundleTailCompletes();
+  testFileManagerFallback();
   testOptionalDeepL();
 
   console.log(`\n${passed} passed, ${failed} failed`);

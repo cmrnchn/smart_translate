@@ -14,7 +14,7 @@ Give this page to anyone who only has an iPhone. They do **not** need a Mac, Git
 | Internet | Yes | To download the app and translate |
 | [Scriptable](https://apps.apple.com/app/scriptable/id1405459188) | Yes | Free from the App Store |
 | [DeepL API key](https://www.deepl.com/your-account/keys) | Yes | Free tier is fine (key ends in `:fx`) |
-| iCloud (signed in) | Recommended | Saves conversations and settings |
+| iCloud (signed in) | Recommended | Syncs conversations and settings. Without iCloud, SmartTranslate saves them on this iPhone only (Scriptable's local Documents folder). |
 
 ---
 
@@ -149,5 +149,5 @@ From the home screen you can:
 ## Privacy note
 
 - Your DeepL key is stored in **Scriptable Keychain** on your device.  
-- Conversation data is stored in **iCloud** under the SmartTranslate folder when iCloud is enabled.  
+- Conversation data is stored in **iCloud** under the SmartTranslate folder when iCloud is enabled, otherwise in Scriptable's **local** Documents folder on this device.  
 - Translation requests go to **DeepL’s servers** (and optionally ElevenLabs if you add that key).
