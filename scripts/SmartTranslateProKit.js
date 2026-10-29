@@ -95,6 +95,14 @@ async function saveSession(session, path) {
 // ============================================================
 
 async function runLibrary(config) {
+  // First run: nothing saved yet → say what goes here and how to add one,
+  // instead of a menu whose every row dead-ends.
+  const existing = await Conversation.loadAllSessions();
+  if (existing.length === 0) {
+    await Shared.showEmptyState("library");
+    return;
+  }
+
   const choice = await Shared.presentTableMenu({
     title: "Library",
     subtitle: "Find and export conversations",
@@ -154,6 +162,10 @@ async function runLibrary(config) {
 }
 
 async function runSearch() {
+  if ((await Conversation.loadAllSessions()).length === 0) {
+    await Shared.showEmptyState("search");
+    return;
+  }
   const query = await Shared.promptForText(
     "Search",
     "Search people, titles, tags, and transcript text."
@@ -191,7 +203,11 @@ async function runSearch() {
   }
 
   if (hits.length === 0) {
-    await Shared.showError(`No results for “${query}”.`);
+    await Shared.showNotice(
+      "No matches",
+      `Nothing saved matches “${query}”. Try a name, a tag, or a word from the chat.`,
+      "info"
+    );
     return;
   }
 
@@ -233,7 +249,7 @@ async function browseFiltered(title, predicate) {
     .map(ensureProFields)
     .filter(predicate);
   if (sessions.length === 0) {
-    await Shared.showError(`No conversations in ${title}.`);
+    await Shared.showEmptyState(title === "Favorites" ? "favorites" : "library");
     return;
   }
 
@@ -411,7 +427,7 @@ function buildExtractiveSummary(session) {
 async function runPeopleDirectory(config) {
   const people = await loadPeopleProfiles();
   if (people.length === 0) {
-    await Shared.showError("No people yet. Start a conversation first.");
+    await Shared.showEmptyState("people");
     return;
   }
 

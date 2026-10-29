@@ -91,9 +91,22 @@ Bottom tabs: **Quick** · **Talk**.
 | **Library** | Past conversations |
 | **Settings** | Languages, API keys, speech engine |
 
-**People** and **Search** are Pro features; in v1 they show a note pointing to Pro. If the WebView fails, a native list menu shows Type / Paste / Transcribe / Send / Dictate / Talk / Settings.
+**People** and **Search** are Pro features; in v1 they show a "This is in Pro" note pointing to the Pro script. If the WebView fails, a native list menu shows Type / Paste / Transcribe / Send / Dictate / Talk / Settings.
 
 One-shot modes do **not** save translation history.
+
+### Free vs Pro gating
+
+Free = **Quick** + **Talk**. Pro = **Library**, **People**, **Search**.
+
+Gating is a flag and ships **off**, because Pro is still free in the public installer. Nobody loses anything today. The flag resolves in this order:
+
+1. The `SmartTranslatePro` script is always Pro.
+2. `config.flags.proGating: true` turns the locks on for this device. In SmartTranslate, this is **Settings → Preview Free Tier**.
+3. `config.flags.proGating: false` keeps this device unlocked.
+4. Otherwise `PRO_GATING_ENABLED` in `SmartTranslateShared.js` decides. It is `false` today.
+
+When the locks are on, Library, People and Search in the free script's top bar are dimmed and get a **PRO** tag. They can still be tapped and show a "This is in Pro" note. To turn gating on for everyone at launch, set `PRO_GATING_ENABLED = true` and run `node tools/bundle.mjs`.
 
 ## Pro Menu (lean)
 

@@ -597,6 +597,200 @@ function testOptionalDeepL() {
   }
 }
 
+// ------------------------------------------------------------
+// Free / Pro gating
+// ------------------------------------------------------------
+
+function testProGatingFlag() {
+  console.log("\nFree/Pro gating flag");
+  const Shared = loadScriptableModule("scripts/SmartTranslateShared.js");
+
+  check("gating ships off (PRO_GATING_ENABLED === false)", Shared.PRO_GATING_ENABLED === false);
+  check("free script with no flag resolves to pro (nothing locked)", Shared.resolveTier("free", {}) === "pro");
+  check("free script with null config resolves to pro", Shared.resolveTier("free", null) === "pro");
+  check(
+    "config.flags.proGating=true previews free tier",
+    Shared.resolveTier("free", { flags: { proGating: true } }) === "free"
+  );
+  check(
+    "config.flags.proGating=false stays unlocked",
+    Shared.resolveTier("free", { flags: { proGating: false } }) === "pro"
+  );
+  check(
+    "non-boolean flag is ignored",
+    Shared.resolveTier("free", { flags: { proGating: "yes" } }) === "pro"
+  );
+  check(
+    "Pro script is always pro, even with the preview flag on",
+    Shared.resolveTier("pro", { flags: { proGating: true } }) === "pro"
+  );
+
+  const locked = Shared.getLockedFeatures("free");
+  check("free tier locks Library, People, Search", locked.library && locked.people && locked.search, JSON.stringify(locked));
+  check(
+    "free tier never locks Quick or Talk",
+    !Shared.isFeatureLocked("quick", "free") && !Shared.isFeatureLocked("talk", "free")
+  );
+  const unlocked = Shared.getLockedFeatures("pro");
+  check("pro tier locks nothing", !unlocked.library && !unlocked.people && !unlocked.search);
+
+  const original = { version: 1, flags: { other: 1 } };
+  const preview = Shared.setProGatingPreview(original, true);
+  check(
+    "setProGatingPreview sets flag without mutating input or dropping other flags",
+    preview.flags.proGating === true && preview.flags.other === 1 && original.flags.proGating === undefined
+  );
+
+  for (const feature of ["library", "people", "search"]) {
+    const note = Shared.getProNote(feature);
+    check(`${feature} Pro note says "This is in Pro" and names the Pro script`,
+      note.title === "This is in Pro" && note.message.includes("SmartTranslatePro"), JSON.stringify(note));
+  }
+  for (const surface of ["library", "people", "search", "favorites"]) {
+    const state = Shared.getEmptyState(surface);
+    check(`${surface} empty state has a title and how-to copy`, !!state.title && state.message.length > 20);
+  }
+}
+
+async function testProNoteAndEmptyStateUI() {
+  console.log("\nPro note / empty state presentation");
+  const shown = [];
+  const Shared = loadScriptableModule("scripts/SmartTranslateShared.js", {
+    UI: {
+      async presentMessage(title, message, options) {
+        shown.push({ title, message, variant: options?.variant });
+        return "ok";
+      }
+    }
+  });
+  await Shared.showProNote("people");
+  await Shared.showEmptyState("library");
+  check("Pro note uses the pro variant", shown[0]?.variant === "pro" && shown[0]?.title === "This is in Pro", JSON.stringify(shown[0]));
+  check(
+    "empty state uses info (not error) styling",
+    shown[1]?.variant === "info" && shown[1]?.title === "No saved chats yet",
+    JSON.stringify(shown[1])
+  );
+
+  const UI = loadScriptableModule("scripts/SmartTranslateUI.js");
+  const proHtml = UI.buildMessageHTML({ title: "This is in Pro", message: "x", variant: "pro" });
+  assertIncludes("pro message card shows PRO kicker", proHtml, 'class="msg-kicker"');
+  const infoHtml = UI.buildMessageHTML({ title: "Hi", message: "x", variant: "info" });
+  assertNotIncludes("info message card has no PRO kicker", infoHtml, 'class="msg-kicker"');
+
+  const lockedHtml = UI.buildV1HomeHTML({
+    primaryCode: "EN",
+    conversationCode: "ES",
+    locked: { library: true, people: true, search: true }
+  });
+  const tagCount = (lockedHtml.match(/class="pro-tag"/g) || []).length;
+  check("locked home shows 3 PRO tags", tagCount === 3, `got ${tagCount}`);
+  assertIncludes("locked Library stays tappable", lockedHtml, 'class="quick-chrome-btn locked" data-action="library"');
+  assertIncludes("Settings never locked", lockedHtml, 'class="quick-chrome-btn" data-action="settings"');
+  const openHtml = UI.buildV1HomeHTML({ primaryCode: "EN", conversationCode: "ES" });
+  assertNotIncludes("unlocked home has no PRO tags", openHtml, 'class="pro-tag"');
+}
+
+async function runFreeEntryScript({ config, actions }) {
+  const RealShared = loadScriptableModule("scripts/SmartTranslateShared.js");
+  const log = { proNotes: [], emptyStates: [], conversations: [], contexts: [] };
+  const queue = [...actions];
+  const Shared = Object.assign({}, RealShared, {
+    async loadConfig() {
+      return config;
+    },
+    async saveConfig() {},
+    async showProNote(feature) {
+      log.proNotes.push(feature);
+    },
+    async showEmptyState(surface) {
+      log.emptyStates.push(surface);
+    }
+  });
+  const Conversation = {
+    async runConversation(_config, options) {
+      log.conversations.push(options?.forceAction || "talk");
+    }
+  };
+  const UI = {
+    async presentV1Home(context) {
+      log.contexts.push(context);
+      const next = queue.shift();
+      return next ? { action: next, text: "" } : null;
+    }
+  };
+  const modules = {
+    SmartTranslateShared: Shared,
+    SmartTranslateConversation: Conversation,
+    SmartTranslateUI: UI
+  };
+  const sandbox = {
+    console,
+    importModule: (name) => modules[name],
+    Script: { complete() {} },
+    Alert: class {
+      addAction() {}
+      async presentAlert() {
+        return 0;
+      }
+    }
+  };
+  const code = `(async () => { ${read("scripts/SmartTranslate.js")} })()`;
+  await vm.runInNewContext(code, sandbox, { filename: "SmartTranslate.js" });
+  return log;
+}
+
+async function testFreeScriptGating() {
+  console.log("\nFree script top bar (gating off vs preview on)");
+  const base = { version: 1, languages: { primary: "EN-US", conversation: "ES", defaultTarget: "EN-US" }, speech: { engine: "apple" } };
+
+  const off = await runFreeEntryScript({ config: base, actions: ["library", "people", "search"] });
+  check("gating off: home context has nothing locked",
+    off.contexts.length === 4 && off.contexts.every((c) => !c.locked.library && !c.locked.people && !c.locked.search));
+  check("gating off: Library opens saved chats like before", off.conversations.join(",") === "history", off.conversations.join(","));
+  check("gating off: People and Search point to the Pro script", off.proNotes.join(",") === "people,search", off.proNotes.join(","));
+
+  const on = await runFreeEntryScript({
+    config: { ...base, flags: { proGating: true } },
+    actions: ["library", "people", "search", "conversation"]
+  });
+  check("preview on: home context locks all three",
+    on.contexts.length === 5 && on.contexts.every((c) => c.locked.library && c.locked.people && c.locked.search));
+  check("preview on: Library/People/Search show the Pro note", on.proNotes.join(",") === "library,people,search", on.proNotes.join(","));
+  check("preview on: Talk still opens (free)", on.conversations.join(",") === "talk", on.conversations.join(","));
+}
+
+async function testProKitEmptyStates() {
+  console.log("\nPro first-run empty states");
+  const log = { empty: [], menus: 0, errors: [] };
+  const RealShared = loadScriptableModule("scripts/SmartTranslateShared.js");
+  const Shared = Object.assign({}, RealShared, {
+    async showEmptyState(surface) {
+      log.empty.push(surface);
+    },
+    async showError(message) {
+      log.errors.push(message);
+    },
+    async presentTableMenu() {
+      log.menus += 1;
+      return null;
+    },
+    async loadJSON() {
+      return null;
+    }
+  });
+  const Conversation = { async loadAllSessions() { return []; } };
+  const ProKit = loadScriptableModule("scripts/SmartTranslateProKit.js", {
+    importModule: (name) => (name === "SmartTranslateShared" ? Shared : Conversation)
+  });
+  await ProKit.runLibrary({});
+  await ProKit.runPeopleDirectory({});
+  check("empty Library shows first-run state, not a dead-end menu",
+    log.empty[0] === "library" && log.menus === 0, JSON.stringify(log));
+  check("empty People shows first-run state", log.empty[1] === "people", JSON.stringify(log));
+  check("empty states never use error styling", log.errors.length === 0, log.errors.join(" | "));
+}
+
 async function main() {
   console.log("SmartTranslate automated checks");
   console.log(`Repo: ${root}`);
@@ -617,6 +811,10 @@ async function main() {
   await testVerifyDeepLKeyErrors();
   await testInstallerNon2xx();
   testOptionalDeepL();
+  testProGatingFlag();
+  await testProNoteAndEmptyStateUI();
+  await testFreeScriptGating();
+  await testProKitEmptyStates();
 
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) {

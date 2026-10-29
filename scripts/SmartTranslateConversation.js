@@ -618,7 +618,7 @@ function getConversationFilePath(session) {
 async function showHistory() {
   const sessions = await loadAllSessions();
   if (sessions.length === 0) {
-    await Shared.showError("No saved conversations.");
+    await Shared.showEmptyState("library");
     return;
   }
 
