@@ -369,12 +369,19 @@ async function verifyDeepLKey(apiKey) {
   request.method = "GET";
   request.timeoutInterval = DEEPL_TIMEOUT;
   request.headers = { Authorization: `DeepL-Auth-Key ${key}` };
-  await request.load();
+  let data = null;
+  try {
+    data = await request.load();
+  } catch (error) {
+    if (!request.response?.statusCode) {
+      throw createDeepLOfflineError(error);
+    }
+  }
   const status = request.response?.statusCode;
   if (status === 200) {
     return true;
   }
-  throw new Error(`DeepL rejected the key (HTTP ${status}).`);
+  throw createDeepLError(request, parseDeepLErrorBody(data));
 }
 
 async function verifyElevenLabsKey(apiKey) {
@@ -751,13 +758,18 @@ async function requestDeepLTranslation(text, targetLanguage, apiKey) {
   }
 }
 
-// On 429, retry once on the same server after Retry-After (or 2s).
+// On 429, retry once on the same server after Retry-After (or 2s), but only
+// when that wait is within DEEPL_RETRY_AFTER_MAX_MS.
 // Never more than 2 POSTs, and a 429 never triggers the server fallback.
 async function postDeepLWithRateLimitRetry(url, text, targetLanguage, apiKey) {
   try {
     return await postDeepLTranslate(url, text, targetLanguage, apiKey);
   } catch (error) {
     if (error?.deeplStatus !== 429) {
+      throw error;
+    }
+    // Don't retry early: if DeepL asks for more than the cap, report now.
+    if (error.deeplRetryAfterMs > DEEPL_RETRY_AFTER_MAX_MS) {
       throw error;
     }
     await pauseMs(error.deeplRetryAfterMs);
@@ -788,20 +800,41 @@ function getDeepLRetryAfterMs(request) {
   if (!Number.isFinite(seconds) || seconds < 0) {
     return DEEPL_RETRY_AFTER_DEFAULT_MS;
   }
-  return Math.min(seconds * 1000, DEEPL_RETRY_AFTER_MAX_MS);
+  return seconds * 1000;
 }
 
 function createDeepLError(request, response, fallbackMessage) {
   const status = request.response?.statusCode;
-  const error = new Error(formatDeepLError(status, response, fallbackMessage));
+  const retryAfterMs = status === 429 ? getDeepLRetryAfterMs(request) : 0;
+  const longWaitSeconds =
+    retryAfterMs > DEEPL_RETRY_AFTER_MAX_MS ? Math.ceil(retryAfterMs / 1000) : null;
+  const error = new Error(
+    formatDeepLError(status, response, fallbackMessage, longWaitSeconds)
+  );
   const apiMessage = response?.message || response?.error || response?.detail;
   error.deeplStatus = status || 0;
   error.deeplWrongEndpoint =
     status === 404 || /wrong endpoint/i.test(String(apiMessage || ""));
   if (status === 429) {
-    error.deeplRetryAfterMs = getDeepLRetryAfterMs(request);
+    error.deeplRetryAfterMs = retryAfterMs;
   }
   return error;
+}
+
+function createDeepLOfflineError(error) {
+  return new Error(
+    "Could not reach DeepL. Check your internet connection and try again." +
+      (error?.message ? `\n\n${error.message}` : "")
+  );
+}
+
+function parseDeepLErrorBody(data) {
+  try {
+    const text = data?.toRawString ? data.toRawString() : null;
+    return text ? JSON.parse(text) : null;
+  } catch (error) {
+    return null;
+  }
 }
 
 async function postDeepLTranslate(url, text, targetLanguage, apiKey) {
@@ -824,10 +857,7 @@ async function postDeepLTranslate(url, text, targetLanguage, apiKey) {
   } catch (error) {
     const status = request.response?.statusCode;
     if (!status) {
-      throw new Error(
-        "Could not reach DeepL. Check your internet connection and try again." +
-          (error?.message ? `\n\n${error.message}` : "")
-      );
+      throw createDeepLOfflineError(error);
     }
     if (status >= 400) {
       // Non-JSON error body (empty 503, HTML 429, …): report by status.
@@ -852,7 +882,7 @@ async function postDeepLTranslate(url, text, targetLanguage, apiKey) {
   return response;
 }
 
-function formatDeepLError(statusCode, response, fallbackMessage) {
+function formatDeepLError(statusCode, response, fallbackMessage, retryAfterSeconds) {
   const apiMessage =
     response?.message ||
     response?.error ||
@@ -883,15 +913,18 @@ function formatDeepLError(statusCode, response, fallbackMessage) {
     );
   }
   if (statusCode === 429) {
+    const when = retryAfterSeconds ? `in about ${retryAfterSeconds}s` : "in a minute";
     return (
-      "DeepL is rate-limiting, try again in a minute. (429)" +
-      (apiMessage ? `\n\nDeepL: ${apiMessage}` : "")
+      `DeepL is rate-limiting, try again ${when}.` +
+      (apiMessage ? `\n\nDeepL: ${apiMessage}` : "") +
+      "\n\nCode 429"
     );
   }
   if (statusCode >= 500 && statusCode <= 599) {
     return (
-      `DeepL is temporarily unavailable (HTTP ${statusCode}). Try again in a minute.` +
-      (apiMessage ? `\n\nDeepL: ${apiMessage}` : "")
+      "DeepL is temporarily unavailable. Try again in a minute." +
+      (apiMessage ? `\n\nDeepL: ${apiMessage}` : "") +
+      `\n\nCode ${statusCode}`
     );
   }
   if (statusCode === 404 || /wrong endpoint/i.test(String(apiMessage || ""))) {
@@ -1104,6 +1137,9 @@ async function speakWithElevenLabs(text, voiceId, apiKey, config) {
 
   const audioData = await request.load();
   const status = request.response?.statusCode;
+  if (status === 401) {
+    throwElevenLabsStatusError(status);
+  }
   if (status && status >= 400) {
     throw new Error(`ElevenLabs TTS failed (HTTP ${status}).`);
   }
@@ -1136,11 +1172,11 @@ async function fetchElevenLabsVoices(apiKey) {
 function throwElevenLabsStatusError(status) {
   if (status === 401) {
     throw new Error(
-      "ElevenLabs rejected the API key (401). Check the key in Settings → API Keys."
+      "ElevenLabs rejected the API key, so it's invalid. Check the key in Settings → API Keys.\n\nCode 401"
     );
   }
   if (status && status >= 400) {
-    throw new Error(`ElevenLabs voice list request failed (HTTP ${status}).`);
+    throw new Error(`ElevenLabs voice list request failed.\n\nCode ${status}`);
   }
 }
 
@@ -4612,8 +4648,10 @@ try {
 } catch (error) {
   try {
     const alert = new Alert();
-    alert.title = "SmartTranslate Error";
-    alert.message = String(error?.message || error || "Unknown error.");
+    alert.title = "Couldn't finish translating";
+    alert.message =
+      "Check your connection and keys, then run SmartTranslate again.\n\n" +
+      String(error?.message || error || "Unknown error.");
     alert.addAction("OK");
     await alert.presentAlert();
   } catch (alertError) {

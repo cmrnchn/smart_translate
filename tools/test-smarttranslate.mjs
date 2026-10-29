@@ -311,7 +311,8 @@ async function testBundleTailCompletes() {
     }
     if (completed) ok(`${rel} Script.complete runs when main throws`);
     else fail(`${rel} Script.complete runs when main throws`, "not called");
-    if (alerts.length === 1 && alerts[0].includes("boom from main")) ok(`${rel} shows error alert`);
+    if (alerts.length === 1 && alerts[0].startsWith("Couldn't finish translating | Check your connection and keys") &&
+      alerts[0].endsWith("\n\nboom from main")) ok(`${rel} shows error alert`);
     else fail(`${rel} shows error alert`, JSON.stringify(alerts));
   }
 }
@@ -416,8 +417,8 @@ async function testDeepLErrorPaths() {
   const empty503 = await deeplCase([{ status: 503, body: "" }]);
   const messages = [offline.message, html429.message, empty503.message];
   check("offline gives a connection message", /Could not reach DeepL/.test(offline.message || ""), offline.message);
-  check("503 empty body gives an unavailable message", /temporarily unavailable \(HTTP 503\)/.test(empty503.message || ""), empty503.message);
-  check("429 HTML body gives a rate-limit message", /rate-limiting, try again in a minute/.test(html429.message || ""), html429.message);
+  check("503 empty body gives an unavailable message", /temporarily unavailable\. Try again in a minute\.\n\nCode 503$/.test(empty503.message || ""), empty503.message);
+  check("429 HTML body gives a rate-limit message", /^DeepL is rate-limiting, try again in a minute\.\n\nCode 429$/.test(html429.message || ""), html429.message);
   check("offline/503/429 never say parse error", messages.every((m) => m && !/Could not parse/.test(m)), JSON.stringify(messages));
   check("offline/503/429 messages are distinct", new Set(messages).size === 3, JSON.stringify(messages));
   check("offline/503 make one POST, no fallback", offline.posts.length === 1 && empty503.posts.length === 1,
@@ -431,16 +432,59 @@ async function testDeepLErrorPaths() {
   check("429 then 200 succeeds on retry", retryOk.message === null && retryOk.posts.length === 2, JSON.stringify(retryOk));
   check("429 honors Retry-After seconds", JSON.stringify(retryOk.waits) === "[3]", JSON.stringify(retryOk.waits));
 
+  const longWait = await deeplCase([{ status: 429, body: "", headers: { "retry-after": "60" } }, { status: 200, body: okBody }]);
+  check("Retry-After 60 = exactly 1 POST", longWait.posts.length === 1, `POSTs: ${longWait.posts.length}`);
+  check("Retry-After 60 does not wait", longWait.waits.length === 0, JSON.stringify(longWait.waits));
+  check("Retry-After 60 message names the wait", /try again in about 60s\.\n\nCode 429$/.test(longWait.message || ""), longWait.message);
+
   const retry404 = await deeplCase([{ status: 429, body: "" }, { status: 404, body: "" }, { status: 200, body: okBody }]);
   check("429 never exceeds 2 POSTs (no fallback after retry)", retry404.posts.length === 2, `POSTs: ${retry404.posts.length}`);
 }
 
 async function testElevenLabs401() {
   console.log("\nElevenLabs key check (mocked HTTP)");
+  const keyInvalid = /^ElevenLabs rejected the API key, so it's invalid\..*\n\nCode 401$/s;
   const { Shared } = loadSharedWithRequests([{ status: 401, body: JSON.stringify({ detail: { message: "Invalid API key" } }) }]);
   let message = null;
   try { await Shared.verifyElevenLabsKey("bogus"); } catch (error) { message = error.message; }
-  check("ElevenLabs 401 says key invalid", /rejected the API key \(401\)/.test(message || "") && !/voice list/.test(message || ""), message);
+  check("ElevenLabs 401 says key invalid", keyInvalid.test(message || "") && !/voice list/.test(message || ""), message);
+
+  // TTS runs inside speakTranslation, which reports the error and falls back to Apple speech.
+  const ttsMock = makeRequestMock([{ status: 401, body: "" }]);
+  const errors = [];
+  const ttsShared = loadScriptableModule("scripts/SmartTranslateShared.js", {
+    Request: ttsMock.Request,
+    console: { ...console, error: (m) => errors.push(String(m)) },
+    Keychain: { contains: () => true, get: () => "bogus" },
+    importModule() { throw new Error("no UI"); },
+    Alert: class { addAction() {} async presentAlert() { return 0; } },
+    Speech: { speak() {} },
+    Timer: { schedule(_s, _r, cb) { cb(); return {}; } }
+  });
+  await ttsShared.speakTranslation("hi", "ES", {
+    speech: { engine: "elevenlabs", elevenlabs: { enabled: true, modelId: "m", voices: { ES: { voiceId: "v" } } } }
+  }).catch(() => {});
+  const ttsMessage = (errors.find((m) => m.startsWith("ElevenLabs failed: ")) || "")
+    .replace(/^ElevenLabs failed: /, "").replace(/\. Falling back to Apple speech\.$/, "");
+  check("ElevenLabs TTS 401 says key invalid", keyInvalid.test(ttsMessage) && !/TTS failed/.test(ttsMessage), JSON.stringify(errors));
+}
+
+async function testVerifyDeepLKeyErrors() {
+  console.log("\nDeepL key check (mocked HTTP)");
+  const offline = loadSharedWithRequests([{ offline: true }]);
+  let message = null;
+  try { await offline.Shared.verifyDeepLKey("k:fx"); } catch (error) { message = error.message; }
+  check("verifyDeepLKey offline gives the friendly message", /^Could not reach DeepL\. Check your internet connection/.test(message || ""), message);
+
+  const forbidden = loadSharedWithRequests([{ status: 403, body: JSON.stringify({ message: "Forbidden" }) }]);
+  message = null;
+  try { await forbidden.Shared.verifyDeepLKey("k:fx"); } catch (error) { message = error.message; }
+  check("verifyDeepLKey 403 says the key is bad", /rejected the API key \(403\)[\s\S]*DeepL: Forbidden/.test(message || ""), message);
+
+  const unavailable = loadSharedWithRequests([{ status: 503, body: "" }]);
+  message = null;
+  try { await unavailable.Shared.verifyDeepLKey("k:fx"); } catch (error) { message = error.message; }
+  check("verifyDeepLKey 503 says temporarily unavailable", /temporarily unavailable[\s\S]*Code 503$/.test(message || ""), message);
 }
 
 async function testInstallerNon2xx() {
@@ -474,7 +518,8 @@ async function testInstallerNon2xx() {
     });
     check(`installer HTTP ${status} does not save`, writes.length === 0, JSON.stringify(writes));
     check(`installer HTTP ${status} shows an Install failed alert`,
-      alerts.some((a) => a.startsWith("Install failed") && a.includes(`HTTP ${status}`)), JSON.stringify(alerts));
+      alerts.some((a) => a === `Install failed | SmartTranslate download failed. Nothing was saved. Check your connection and run the installer again.\n\nCode ${status}`),
+      JSON.stringify(alerts));
     check(`installer HTTP ${status} still completes`, completed, "Script.complete not called");
   }
 }
@@ -514,6 +559,7 @@ async function main() {
   testFileManagerFallback();
   await testDeepLErrorPaths();
   await testElevenLabs401();
+  await testVerifyDeepLKeyErrors();
   await testInstallerNon2xx();
   testOptionalDeepL();
 
