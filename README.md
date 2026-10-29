@@ -10,7 +10,7 @@ Scriptable app for bidirectional translation with optional conversation transcri
 
 1. On your iPhone, open the installer raw link in [`scripts/dist/LINKS.md`](scripts/dist/LINKS.md) (`install-smarttranslate.js`).
 2. In **Scriptable**, create one new script (any name), paste the installer, and **run it once**.
-3. Choose **Install SmartTranslate (v1)** or **Install SmartTranslate Pro**.
+3. Choose **Install SmartTranslate 1.2.0-standalone** (v1) or **Install SmartTranslate Pro 1.2.0-pro-standalone**. (The labels show the bundle version from `scripts/dist/`.)
 
 The installer downloads the bundle, saves it as a real Scriptable script with the correct name, **removes itself**, and opens the app. Next time, run `SmartTranslate` or `SmartTranslatePro` directly from your script list.
 
@@ -43,22 +43,24 @@ node tools/test-smarttranslate.mjs
 
 `importModule` only works if each dependency exists as its **own Scriptable script** with the **exact** name (no spaces, matching capitalization). Scriptable does **not** load modules from this git repo folder automatically.
 
-### v1 (3 scripts)
+### v1 (4 scripts)
 
 Create these scripts and paste the matching `scripts/*.js` files:
 
 1. `SmartTranslateShared`
 2. `SmartTranslateConversation`
-3. `SmartTranslate` ← run this one
+3. `SmartTranslateUI`
+4. `SmartTranslate` ← run this one
 
-### Pro (4 scripts)
+### Pro (5 scripts)
 
 1. `SmartTranslateShared`
 2. `SmartTranslateConversation`
 3. `SmartTranslateProKit`
-4. `SmartTranslatePro` ← run this one
+4. `SmartTranslateUI`
+5. `SmartTranslatePro` ← run this one
 
-If you only paste `SmartTranslate.js`, you get: **Error on line 28: no file to import at SmartTranslateShared**.
+If any of these is missing (for example you only paste `SmartTranslate.js`), the app shows a **Missing Scriptable Modules** alert listing the exact script names it needs, then stops.
 
 ## Scripts
 
@@ -68,19 +70,28 @@ If you only paste `SmartTranslate.js`, you get: **Error on line 28: no file to i
 | `scripts/dist/SmartTranslatePro.js` | **Recommended** — single-file Pro |
 | `SmartTranslateShared.js` | Shared config, iCloud storage, DeepL, TTS |
 | `SmartTranslateConversation.js` | Conversation Mode engine |
+| `SmartTranslateUI.js` | WebView screens (home, settings, prompts) |
 | `SmartTranslate.js` | Modular v1 entry |
 | `SmartTranslateProKit.js` | Pro intelligence + export |
 | `SmartTranslatePro.js` | Modular Pro entry |
 
-## v1 Menu
+## v1 Menu (Quick screen)
+
+Bottom tabs: **Quick** · **Talk**.
 
 | Action | What it does |
 |--------|----------------|
-| **Type** | Type text → translate → speak |
-| **Paste** | Clipboard → translate → speak |
-| **Dictate** | Speech → translate → speak |
-| **Conversation** | Multi-turn session with a person |
+| Input box | Type or edit the text to translate |
+| **Paste** | Fill the input from the clipboard |
+| **Transcribe** | Speech → input box (edit before sending) |
+| **Send** | Translate the current input → speak |
+| **Dictate** | Speech → translate immediately → speak |
+| **Copy** / **Share** | Copy or share the last translation |
+| **Talk** | Multi-turn conversation with a person |
+| **Library** | Past conversations |
 | **Settings** | Languages, API keys, speech engine |
+
+**People** and **Search** are Pro features; in v1 they show a note pointing to Pro. If the WebView fails, a native list menu shows Type / Paste / Transcribe / Send / Dictate / Talk / Settings.
 
 One-shot modes do **not** save translation history.
 
@@ -88,17 +99,20 @@ One-shot modes do **not** save translation history.
 
 | Action | What it does |
 |--------|----------------|
-| **Quick Translate ›** | Type / Paste / Dictate |
-| **Conversation** | Multi-turn session + short save summary |
+| **Type** / **Paste** / **Dictate** | Quick actions: translate → speak |
+| **Continue** | Resume an interrupted conversation (only shown when one exists) |
 | **Library** | Search, favorites, browse, export |
 | **People** | Profiles and past chats |
+| **Conversation** | Multi-turn session + short save summary |
 | **Settings** | Languages, API keys, speech |
 
-Home stays open (UITable) until you dismiss it. Post-session only shows a short summary + optional favorite.
+Home stays open until you dismiss it. If the WebView fails, Pro falls back to a native list (**Translate ›** for Type / Paste / Dictate, then Conversation, Library, People, Settings). Post-session only shows a short summary + optional favorite.
 
 **Not in lean Pro UI:** Timeline, Statistics, Learning, Voice Profiles menu, OpenAI summaries, memory prompts, long tag/purpose wizards.
 
-## Storage (iCloud)
+## Storage (iCloud, local fallback)
+
+Files live in Scriptable's iCloud Documents folder. If iCloud Drive is off for Scriptable, they are saved in Scriptable's local (on-device) Documents folder instead and do not sync.
 
 ```
 SmartTranslate/
@@ -117,7 +131,6 @@ SmartTranslate/
 |-----|---------|
 | `SMART_TRANSLATE_DEEPL_API_KEY` | DeepL (use `:fx` for free tier) |
 | `SMART_TRANSLATE_ELEVENLABS_API_KEY` | Optional ElevenLabs TTS |
-| `SMART_TRANSLATE_OPENAI_API_KEY` | Optional richer Pro summaries |
 
 ## Conversation Mode (v1 contract)
 

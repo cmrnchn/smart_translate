@@ -58,6 +58,27 @@ function prepareEntry(source) {
   return out;
 }
 
+// Entry tail for standalone bundles: always reach Script.complete(), and show
+// an alert instead of an uncaught error if main() throws.
+const BUNDLE_TAIL = `try {
+  await main();
+} catch (error) {
+  try {
+    const alert = new Alert();
+    alert.title = "SmartTranslate hit an error";
+    alert.message =
+      "Check your connection and keys, then run SmartTranslate again.\\n\\n" +
+      String(error?.message || error || "Unknown error.");
+    alert.addAction("OK");
+    await alert.presentAlert();
+  } catch (alertError) {
+    console.error(\`SmartTranslate error: \${error?.message || error}\`);
+  }
+} finally {
+  Script.complete();
+}
+`;
+
 function bundleV1() {
   const shared = toConstExport(read("SmartTranslateShared.js"), "Shared");
   const conversation = toConstExport(
@@ -80,9 +101,7 @@ ${ui}
 
 ${entry.trim()}
 
-await main();
-Script.complete();
-`;
+${BUNDLE_TAIL}`;
 }
 
 function bundlePro() {
@@ -110,9 +129,7 @@ ${ui}
 
 ${entry.trim()}
 
-await main();
-Script.complete();
-`;
+${BUNDLE_TAIL}`;
 }
 
 fs.mkdirSync(distDir, { recursive: true });

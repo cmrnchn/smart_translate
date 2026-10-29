@@ -11,7 +11,14 @@ function installerTitle() {
 }
 
 function getFileManager() {
-  return FileManager.iCloud();
+  // Prefer iCloud; fall back to on-device storage when iCloud is unavailable.
+  try {
+    const fm = FileManager.iCloud();
+    fm.documentsDirectory();
+    return fm;
+  } catch (error) {
+    return FileManager.local();
+  }
 }
 
 function sanitizeScriptName(name) {
@@ -83,6 +90,12 @@ async function downloadSource(item) {
     "User-Agent": item.userAgent || `ScriptInstall/${installerVersion()}`
   };
   const text = await request.loadString();
+  const status = request.response?.statusCode;
+  if (status && (status < 200 || status >= 300)) {
+    throw new Error(
+      `${item.label || item.scriptName} download failed. Nothing was saved. Check your connection and run the installer again.\n\nCode ${status}`
+    );
+  }
   validateSource(text, item);
   return text;
 }

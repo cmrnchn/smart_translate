@@ -70,7 +70,14 @@ const LANGUAGE_OPTIONS = [
 // ============================================================
 
 function getFileManager() {
-  return FileManager.iCloud();
+  // Prefer iCloud; fall back to on-device storage when iCloud is unavailable.
+  try {
+    const fm = FileManager.iCloud();
+    fm.documentsDirectory();
+    return fm;
+  } catch (error) {
+    return FileManager.local();
+  }
 }
 
 function getAppDirectory() {
@@ -356,12 +363,19 @@ async function verifyDeepLKey(apiKey) {
   request.method = "GET";
   request.timeoutInterval = DEEPL_TIMEOUT;
   request.headers = { Authorization: `DeepL-Auth-Key ${key}` };
-  await request.load();
+  let data = null;
+  try {
+    data = await request.load();
+  } catch (error) {
+    if (!request.response?.statusCode) {
+      throw createDeepLOfflineError(error);
+    }
+  }
   const status = request.response?.statusCode;
   if (status === 200) {
     return true;
   }
-  throw new Error(`DeepL rejected the key (HTTP ${status}).`);
+  throw createDeepLError(request, parseDeepLErrorBody(data));
 }
 
 async function verifyElevenLabsKey(apiKey) {
@@ -726,14 +740,94 @@ async function requestDeepLTranslation(text, targetLanguage, apiKey) {
     ? "https://api.deepl.com/v2/translate"
     : "https://api-free.deepl.com/v2/translate";
 
+  // Only a 404 / "wrong endpoint" switches servers. A 403 means the key is
+  // bad, so it is reported after one POST.
   try {
-    return await postDeepLTranslate(primary, text, target, key);
+    return await postDeepLWithRateLimitRetry(primary, text, target, key);
   } catch (error) {
-    const message = String(error?.message || error);
-    if (/wrong endpoint|404|403|Forbidden|Not Found/i.test(message)) {
+    if (error?.deeplWrongEndpoint) {
       return await postDeepLTranslate(fallback, text, target, key);
     }
     throw error;
+  }
+}
+
+// On 429, retry once on the same server after Retry-After (or 2s), but only
+// when that wait is within DEEPL_RETRY_AFTER_MAX_MS.
+// Never more than 2 POSTs, and a 429 never triggers the server fallback.
+async function postDeepLWithRateLimitRetry(url, text, targetLanguage, apiKey) {
+  try {
+    return await postDeepLTranslate(url, text, targetLanguage, apiKey);
+  } catch (error) {
+    if (error?.deeplStatus !== 429) {
+      throw error;
+    }
+    // Don't retry early: if DeepL asks for more than the cap, report now.
+    if (error.deeplRetryAfterMs > DEEPL_RETRY_AFTER_MAX_MS) {
+      throw error;
+    }
+    await pauseMs(error.deeplRetryAfterMs);
+    try {
+      return await postDeepLTranslate(url, text, targetLanguage, apiKey);
+    } catch (retryError) {
+      if (retryError && typeof retryError === "object") {
+        retryError.deeplWrongEndpoint = false;
+      }
+      throw retryError;
+    }
+  }
+}
+
+const DEEPL_RETRY_AFTER_DEFAULT_MS = 2000;
+const DEEPL_RETRY_AFTER_MAX_MS = 10000;
+
+function getDeepLRetryAfterMs(request) {
+  const headers = request.response?.headers || {};
+  let raw = null;
+  for (const name of Object.keys(headers)) {
+    if (name.toLowerCase() === "retry-after") {
+      raw = headers[name];
+      break;
+    }
+  }
+  const seconds = Number.parseFloat(String(raw ?? "").trim());
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    return DEEPL_RETRY_AFTER_DEFAULT_MS;
+  }
+  return seconds * 1000;
+}
+
+function createDeepLError(request, response, fallbackMessage) {
+  const status = request.response?.statusCode;
+  const retryAfterMs = status === 429 ? getDeepLRetryAfterMs(request) : 0;
+  const longWaitSeconds =
+    retryAfterMs > DEEPL_RETRY_AFTER_MAX_MS ? Math.ceil(retryAfterMs / 1000) : null;
+  const error = new Error(
+    formatDeepLError(status, response, fallbackMessage, longWaitSeconds)
+  );
+  const apiMessage = response?.message || response?.error || response?.detail;
+  error.deeplStatus = status || 0;
+  error.deeplWrongEndpoint =
+    status === 404 || /wrong endpoint/i.test(String(apiMessage || ""));
+  if (status === 429) {
+    error.deeplRetryAfterMs = retryAfterMs;
+  }
+  return error;
+}
+
+function createDeepLOfflineError(error) {
+  return new Error(
+    "Could not reach DeepL. Check your internet connection and try again." +
+      (error?.message ? `\n\n${error.message}` : "")
+  );
+}
+
+function parseDeepLErrorBody(data) {
+  try {
+    const text = data?.toRawString ? data.toRawString() : null;
+    return text ? JSON.parse(text) : null;
+  } catch (error) {
+    return null;
   }
 }
 
@@ -756,28 +850,33 @@ async function postDeepLTranslate(url, text, targetLanguage, apiKey) {
     response = await request.loadJSON();
   } catch (error) {
     const status = request.response?.statusCode;
-    throw new Error(
-      formatDeepLError(
-        status,
-        null,
-        `Could not parse DeepL response.${error?.message ? ` ${error.message}` : ""}`
-      )
+    if (!status) {
+      throw createDeepLOfflineError(error);
+    }
+    if (status >= 400) {
+      // Non-JSON error body (empty 503, HTML 429, …): report by status.
+      throw createDeepLError(request, null);
+    }
+    throw createDeepLError(
+      request,
+      null,
+      `Could not parse DeepL response.${error?.message ? ` ${error.message}` : ""}`
     );
   }
 
   const status = request.response?.statusCode;
   if (status && status >= 400) {
-    throw new Error(formatDeepLError(status, response));
+    throw createDeepLError(request, response);
   }
 
   if (!response?.translations?.[0]?.text) {
-    throw new Error(formatDeepLError(status, response, "DeepL returned no translation."));
+    throw createDeepLError(request, response, "DeepL returned no translation.");
   }
 
   return response;
 }
 
-function formatDeepLError(statusCode, response, fallbackMessage) {
+function formatDeepLError(statusCode, response, fallbackMessage, retryAfterSeconds) {
   const apiMessage =
     response?.message ||
     response?.error ||
@@ -805,6 +904,21 @@ function formatDeepLError(statusCode, response, fallbackMessage) {
       "DeepL rejected the request (400).\n\n" +
       "Often a bad target language code." +
       (apiMessage ? `\n\nDeepL: ${apiMessage}` : "")
+    );
+  }
+  if (statusCode === 429) {
+    const when = retryAfterSeconds ? `in about ${retryAfterSeconds}s` : "in a minute";
+    return (
+      `DeepL is rate-limiting, try again ${when}.` +
+      (apiMessage ? `\n\nDeepL: ${apiMessage}` : "") +
+      "\n\nCode 429"
+    );
+  }
+  if (statusCode >= 500 && statusCode <= 599) {
+    return (
+      "DeepL is temporarily unavailable. Try again in a minute." +
+      (apiMessage ? `\n\nDeepL: ${apiMessage}` : "") +
+      `\n\nCode ${statusCode}`
     );
   }
   if (statusCode === 404 || /wrong endpoint/i.test(String(apiMessage || ""))) {
@@ -1017,6 +1131,9 @@ async function speakWithElevenLabs(text, voiceId, apiKey, config) {
 
   const audioData = await request.load();
   const status = request.response?.statusCode;
+  if (status === 401) {
+    throwElevenLabsStatusError(status);
+  }
   if (status && status >= 400) {
     throw new Error(`ElevenLabs TTS failed (HTTP ${status}).`);
   }
@@ -1032,11 +1149,29 @@ async function fetchElevenLabsVoices(apiKey) {
   request.method = "GET";
   request.timeoutInterval = ELEVENLABS_TIMEOUT;
   request.headers = { "xi-api-key": apiKey };
-  const response = await request.loadJSON();
+  let response;
+  try {
+    response = await request.loadJSON();
+  } catch (error) {
+    throwElevenLabsStatusError(request.response?.statusCode);
+    throw error;
+  }
+  throwElevenLabsStatusError(request.response?.statusCode);
   if (!response?.voices) {
     throw new Error("ElevenLabs returned an invalid voice list.");
   }
   return response.voices;
+}
+
+function throwElevenLabsStatusError(status) {
+  if (status === 401) {
+    throw new Error(
+      "ElevenLabs didn't accept your API key. Check it in Settings → API Keys.\n\nCode 401"
+    );
+  }
+  if (status && status >= 400) {
+    throw new Error(`ElevenLabs voice list request failed.\n\nCode ${status}`);
+  }
 }
 
 // ============================================================

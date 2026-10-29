@@ -10,6 +10,7 @@
 import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
+import vm from "vm";
 import { fileURLToPath } from "url";
 import { loadScriptableModule } from "./load-scriptable-module.mjs";
 
@@ -332,6 +333,251 @@ function testBundleRegressionGuards() {
   assertIncludes("Pro has WebView fallback", read("scripts/SmartTranslatePro.js"), "showMainMenuFallback");
 }
 
+async function testBundleTailCompletes() {
+  console.log("\nBundle tail (main throws)");
+  for (const rel of ["scripts/dist/SmartTranslate.js", "scripts/dist/SmartTranslatePro.js"]) {
+    const code = `(async()=>{ ${read(rel)} })()`;
+    let completed = false;
+    const alerts = [];
+    class Alert {
+      addAction() {}
+      async presentAlert() { alerts.push(`${this.title} | ${this.message}`); return 0; }
+    }
+    const ctx = {
+      console: { ...console, error() {} },
+      Alert,
+      Script: { complete() { completed = true; }, setShortcutOutput() {} },
+      FileManager: {
+        iCloud() { throw new Error("iCloud is not enabled for Scriptable"); },
+        local() { throw new Error("boom from main"); }
+      }
+    };
+    let rejected = null;
+    try {
+      await vm.runInNewContext(code, ctx);
+    } catch (error) {
+      rejected = error;
+    }
+    if (rejected) {
+      fail(`${rel} main() error is caught`, rejected.message);
+    } else {
+      ok(`${rel} main() error is caught`);
+    }
+    if (completed) ok(`${rel} Script.complete runs when main throws`);
+    else fail(`${rel} Script.complete runs when main throws`, "not called");
+    if (alerts.length === 1 && alerts[0].startsWith("SmartTranslate hit an error | Check your connection and keys") &&
+      alerts[0].endsWith("\n\nboom from main")) ok(`${rel} shows error alert`);
+    else fail(`${rel} shows error alert`, JSON.stringify(alerts));
+  }
+}
+
+function makeFm(kind) {
+  return {
+    kind,
+    documentsDirectory() { return `/${kind}/Documents`; },
+    joinPath(a, b) { return `${a}/${b}`; },
+    fileExists() { return true; },
+    createDirectory() {}
+  };
+}
+
+function testFileManagerFallback() {
+  console.log("\nStorage fallback (iCloud → local)");
+  const cases = [
+    ["scripts/SmartTranslateShared.js", (g) => loadScriptableModule("scripts/SmartTranslateShared.js", g).getFileManager()],
+    ["scripts/ScriptInstall.runtime.js", (g) => {
+      const code = read("scripts/ScriptInstall.runtime.js").replace(/try \{\s*await main\(\);[\s\S]*$/, "");
+      const ctx = { ...g, INSTALLER: { items: [] } };
+      vm.runInNewContext(code + "\nthis.__fm = getFileManager();", ctx);
+      return ctx.__fm;
+    }]
+  ];
+  for (const [rel, getFm] of cases) {
+    const available = getFm({ FileManager: { iCloud: () => makeFm("icloud"), local: () => makeFm("local") } });
+    if (available?.kind === "icloud") ok(`${rel} uses iCloud when available`);
+    else fail(`${rel} uses iCloud when available`, `got ${available?.kind}`);
+    const throwing = getFm({ FileManager: { iCloud: () => { throw new Error("iCloud is not enabled"); }, local: () => makeFm("local") } });
+    if (throwing?.kind === "local") ok(`${rel} falls back to local when iCloud throws`);
+    else fail(`${rel} falls back to local when iCloud throws`, `got ${throwing?.kind}`);
+    const noDocs = getFm({ FileManager: { iCloud: () => ({ ...makeFm("icloud"), documentsDirectory() { throw new Error("no iCloud docs"); } }), local: () => makeFm("local") } });
+    if (noDocs?.kind === "local") ok(`${rel} falls back to local when iCloud docs unavailable`);
+    else fail(`${rel} falls back to local when iCloud docs unavailable`, `got ${noDocs?.kind}`);
+  }
+}
+
+// Scriptable Request mock: each call consumes the next scripted reply.
+// reply = { offline: true } | { status, body, headers }
+function makeRequestMock(replies) {
+  const calls = [];
+  class Request {
+    constructor(url) { this.url = url; this.method = "GET"; this.headers = {}; this.response = undefined; }
+    _next() {
+      calls.push({ method: this.method, url: this.url });
+      const reply = replies.length > 1 ? replies.shift() : replies[0];
+      if (reply.offline) {
+        throw new Error("The Internet connection appears to be offline.");
+      }
+      this.response = { statusCode: reply.status, headers: reply.headers || {} };
+      return reply.body ?? "";
+    }
+    async loadJSON() { return JSON.parse(this._next()); }
+    async loadString() { return this._next(); }
+    async load() { const t = this._next(); return { toRawString: () => t }; }
+  }
+  return { Request, calls };
+}
+
+function loadSharedWithRequests(replies) {
+  const mock = makeRequestMock(replies);
+  const waits = [];
+  const Shared = loadScriptableModule("scripts/SmartTranslateShared.js", {
+    Request: mock.Request,
+    Timer: { schedule(seconds, _repeat, cb) { waits.push(seconds); cb(); return {}; } }
+  });
+  return { Shared, calls: mock.calls, waits };
+}
+
+async function deeplCase(replies, key = "k:fx") {
+  const { Shared, calls, waits } = loadSharedWithRequests(replies);
+  let message = null;
+  try {
+    await Shared.translateWithDeepL("hola", key, { primary: "EN", conversation: "ES", defaultTarget: "EN" });
+  } catch (error) {
+    message = error.message;
+  }
+  return { message, posts: calls.filter((c) => c.method === "POST"), waits };
+}
+
+function check(name, condition, detail) {
+  if (condition) ok(name);
+  else fail(name, detail);
+}
+
+async function testDeepLErrorPaths() {
+  console.log("\nDeepL error paths (mocked HTTP)");
+  const okBody = JSON.stringify({ translations: [{ detected_source_language: "ES", text: "hello" }] });
+
+  const forbidden = await deeplCase([{ status: 403, body: JSON.stringify({ message: "Forbidden" }) }]);
+  check("403 makes exactly one POST", forbidden.posts.length === 1, `POSTs: ${forbidden.posts.length}`);
+  check("403 says the key is bad", /rejected the API key \(403\)/.test(forbidden.message || ""), forbidden.message);
+
+  const wrong = await deeplCase([{ status: 404, body: "" }, { status: 200, body: okBody }]);
+  check("404 falls back to the other server", wrong.message === null && wrong.posts.length === 2 &&
+    wrong.posts[0].url.includes("api-free.deepl.com") && wrong.posts[1].url.includes("://api.deepl.com"),
+    JSON.stringify(wrong));
+
+  const offline = await deeplCase([{ offline: true }]);
+  const html429 = await deeplCase([{ status: 429, body: "<html>Too Many Requests</html>" }]);
+  const empty503 = await deeplCase([{ status: 503, body: "" }]);
+  const messages = [offline.message, html429.message, empty503.message];
+  check("offline gives a connection message", /Could not reach DeepL/.test(offline.message || ""), offline.message);
+  check("503 empty body gives an unavailable message", /temporarily unavailable\. Try again in a minute\.\n\nCode 503$/.test(empty503.message || ""), empty503.message);
+  check("429 HTML body gives a rate-limit message", /^DeepL is rate-limiting, try again in a minute\.\n\nCode 429$/.test(html429.message || ""), html429.message);
+  check("offline/503/429 never say parse error", messages.every((m) => m && !/Could not parse/.test(m)), JSON.stringify(messages));
+  check("offline/503/429 messages are distinct", new Set(messages).size === 3, JSON.stringify(messages));
+  check("offline/503 make one POST, no fallback", offline.posts.length === 1 && empty503.posts.length === 1,
+    `${offline.posts.length}/${empty503.posts.length}`);
+
+  check("429 twice = 2 POSTs on same server", html429.posts.length === 2 &&
+    html429.posts.every((c) => c.url === html429.posts[0].url), JSON.stringify(html429.posts));
+  check("429 without Retry-After waits 2s", JSON.stringify(html429.waits) === "[2]", JSON.stringify(html429.waits));
+
+  const retryOk = await deeplCase([{ status: 429, body: "{}", headers: { "Retry-After": "3" } }, { status: 200, body: okBody }]);
+  check("429 then 200 succeeds on retry", retryOk.message === null && retryOk.posts.length === 2, JSON.stringify(retryOk));
+  check("429 honors Retry-After seconds", JSON.stringify(retryOk.waits) === "[3]", JSON.stringify(retryOk.waits));
+
+  const longWait = await deeplCase([{ status: 429, body: "", headers: { "retry-after": "60" } }, { status: 200, body: okBody }]);
+  check("Retry-After 60 = exactly 1 POST", longWait.posts.length === 1, `POSTs: ${longWait.posts.length}`);
+  check("Retry-After 60 does not wait", longWait.waits.length === 0, JSON.stringify(longWait.waits));
+  check("Retry-After 60 message names the wait", /try again in about 60s\.\n\nCode 429$/.test(longWait.message || ""), longWait.message);
+
+  const retry404 = await deeplCase([{ status: 429, body: "" }, { status: 404, body: "" }, { status: 200, body: okBody }]);
+  check("429 never exceeds 2 POSTs (no fallback after retry)", retry404.posts.length === 2, `POSTs: ${retry404.posts.length}`);
+}
+
+async function testElevenLabs401() {
+  console.log("\nElevenLabs key check (mocked HTTP)");
+  const keyInvalid = /^ElevenLabs didn't accept your API key\..*\n\nCode 401$/s;
+  const { Shared } = loadSharedWithRequests([{ status: 401, body: JSON.stringify({ detail: { message: "Invalid API key" } }) }]);
+  let message = null;
+  try { await Shared.verifyElevenLabsKey("bogus"); } catch (error) { message = error.message; }
+  check("ElevenLabs 401 says key invalid", keyInvalid.test(message || "") && !/voice list/.test(message || ""), message);
+
+  // TTS runs inside speakTranslation, which reports the error and falls back to Apple speech.
+  const ttsMock = makeRequestMock([{ status: 401, body: "" }]);
+  const errors = [];
+  const ttsShared = loadScriptableModule("scripts/SmartTranslateShared.js", {
+    Request: ttsMock.Request,
+    console: { ...console, error: (m) => errors.push(String(m)) },
+    Keychain: { contains: () => true, get: () => "bogus" },
+    importModule() { throw new Error("no UI"); },
+    Alert: class { addAction() {} async presentAlert() { return 0; } },
+    Speech: { speak() {} },
+    Timer: { schedule(_s, _r, cb) { cb(); return {}; } }
+  });
+  await ttsShared.speakTranslation("hi", "ES", {
+    speech: { engine: "elevenlabs", elevenlabs: { enabled: true, modelId: "m", voices: { ES: { voiceId: "v" } } } }
+  }).catch(() => {});
+  const ttsMessage = (errors.find((m) => m.startsWith("ElevenLabs failed: ")) || "")
+    .replace(/^ElevenLabs failed: /, "").replace(/\. Falling back to Apple speech\.$/, "");
+  check("ElevenLabs TTS 401 says key invalid", keyInvalid.test(ttsMessage) && !/TTS failed/.test(ttsMessage), JSON.stringify(errors));
+}
+
+async function testVerifyDeepLKeyErrors() {
+  console.log("\nDeepL key check (mocked HTTP)");
+  const offline = loadSharedWithRequests([{ offline: true }]);
+  let message = null;
+  try { await offline.Shared.verifyDeepLKey("k:fx"); } catch (error) { message = error.message; }
+  check("verifyDeepLKey offline gives the friendly message", /^Could not reach DeepL\. Check your internet connection/.test(message || ""), message);
+
+  const forbidden = loadSharedWithRequests([{ status: 403, body: JSON.stringify({ message: "Forbidden" }) }]);
+  message = null;
+  try { await forbidden.Shared.verifyDeepLKey("k:fx"); } catch (error) { message = error.message; }
+  check("verifyDeepLKey 403 says the key is bad", /rejected the API key \(403\)[\s\S]*DeepL: Forbidden/.test(message || ""), message);
+
+  const unavailable = loadSharedWithRequests([{ status: 503, body: "" }]);
+  message = null;
+  try { await unavailable.Shared.verifyDeepLKey("k:fx"); } catch (error) { message = error.message; }
+  check("verifyDeepLKey 503 says temporarily unavailable", /temporarily unavailable[\s\S]*Code 503$/.test(message || ""), message);
+}
+
+async function testInstallerNon2xx() {
+  console.log("\nInstaller download (mocked HTTP)");
+  for (const status of [404, 500]) {
+    const { Request } = makeRequestMock([{ status, body: "x".repeat(5000) + " SmartTranslate async function main" }]);
+    const writes = [];
+    const alerts = [];
+    class Alert {
+      addAction() {}
+      async presentAlert() { alerts.push(`${this.title} | ${this.message}`); return 0; }
+    }
+    const fm = {
+      documentsDirectory: () => "/docs",
+      joinPath: (a, b) => `${a}/${b}`,
+      fileExists: () => false,
+      writeString: (p) => writes.push(p),
+      remove() {}
+    };
+    let completed = false;
+    const installer = {
+      title: "T", deleteSelf: true, runAfterInstall: false, confirmOverwrite: true,
+      items: [{ scriptName: "SmartTranslate", label: "SmartTranslate", url: "https://example.com/SmartTranslate.js", minBytes: 10 }]
+    };
+    const code = `(async()=>{ const INSTALLER = ${JSON.stringify(installer)};\n${read("scripts/ScriptInstall.runtime.js")} })()`;
+    await vm.runInNewContext(code, {
+      Request, Alert, console,
+      FileManager: { iCloud: () => fm, local: () => fm },
+      Script: { name: () => "Installer", complete() { completed = true; } },
+      Safari: { open() {} }
+    });
+    check(`installer HTTP ${status} does not save`, writes.length === 0, JSON.stringify(writes));
+    check(`installer HTTP ${status} shows an Install failed alert`,
+      alerts.some((a) => a === `Install failed | SmartTranslate download failed. Nothing was saved. Check your connection and run the installer again.\n\nCode ${status}`),
+      JSON.stringify(alerts));
+    check(`installer HTTP ${status} still completes`, completed, "Script.complete not called");
+  }
+}
+
 function testOptionalDeepL() {
   console.log("\nDeepL (optional)");
   const key = process.env.DEEPL_API_KEY || "";
@@ -364,6 +610,12 @@ async function main() {
   await testV1SendPayload();
   await testV1EditedActionPayload();
   testBundleRegressionGuards();
+  await testBundleTailCompletes();
+  testFileManagerFallback();
+  await testDeepLErrorPaths();
+  await testElevenLabs401();
+  await testVerifyDeepLKeyErrors();
+  await testInstallerNon2xx();
   testOptionalDeepL();
 
   console.log(`\n${passed} passed, ${failed} failed`);
