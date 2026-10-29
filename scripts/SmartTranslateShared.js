@@ -1166,7 +1166,7 @@ async function fetchElevenLabsVoices(apiKey) {
 function throwElevenLabsStatusError(status) {
   if (status === 401) {
     throw new Error(
-      "ElevenLabs rejected the API key, so it's invalid. Check the key in Settings → API Keys.\n\nCode 401"
+      "ElevenLabs didn't accept your API key. Check it in Settings → API Keys.\n\nCode 401"
     );
   }
   if (status && status >= 400) {

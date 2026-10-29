@@ -1172,7 +1172,7 @@ async function fetchElevenLabsVoices(apiKey) {
 function throwElevenLabsStatusError(status) {
   if (status === 401) {
     throw new Error(
-      "ElevenLabs rejected the API key, so it's invalid. Check the key in Settings → API Keys.\n\nCode 401"
+      "ElevenLabs didn't accept your API key. Check it in Settings → API Keys.\n\nCode 401"
     );
   }
   if (status && status >= 400) {
@@ -4648,7 +4648,7 @@ try {
 } catch (error) {
   try {
     const alert = new Alert();
-    alert.title = "Couldn't finish translating";
+    alert.title = "SmartTranslate hit an error";
     alert.message =
       "Check your connection and keys, then run SmartTranslate again.\n\n" +
       String(error?.message || error || "Unknown error.");
