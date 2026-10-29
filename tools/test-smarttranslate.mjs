@@ -404,6 +404,135 @@ function testFileManagerFallback() {
   }
 }
 
+// Scriptable Request mock: each call consumes the next scripted reply.
+// reply = { offline: true } | { status, body, headers }
+function makeRequestMock(replies) {
+  const calls = [];
+  class Request {
+    constructor(url) { this.url = url; this.method = "GET"; this.headers = {}; this.response = undefined; }
+    _next() {
+      calls.push({ method: this.method, url: this.url });
+      const reply = replies.length > 1 ? replies.shift() : replies[0];
+      if (reply.offline) {
+        throw new Error("The Internet connection appears to be offline.");
+      }
+      this.response = { statusCode: reply.status, headers: reply.headers || {} };
+      return reply.body ?? "";
+    }
+    async loadJSON() { return JSON.parse(this._next()); }
+    async loadString() { return this._next(); }
+    async load() { const t = this._next(); return { toRawString: () => t }; }
+  }
+  return { Request, calls };
+}
+
+function loadSharedWithRequests(replies) {
+  const mock = makeRequestMock(replies);
+  const waits = [];
+  const Shared = loadScriptableModule("scripts/SmartTranslateShared.js", {
+    Request: mock.Request,
+    Timer: { schedule(seconds, _repeat, cb) { waits.push(seconds); cb(); return {}; } }
+  });
+  return { Shared, calls: mock.calls, waits };
+}
+
+async function deeplCase(replies, key = "k:fx") {
+  const { Shared, calls, waits } = loadSharedWithRequests(replies);
+  let message = null;
+  try {
+    await Shared.translateWithDeepL("hola", key, { primary: "EN", conversation: "ES", defaultTarget: "EN" });
+  } catch (error) {
+    message = error.message;
+  }
+  return { message, posts: calls.filter((c) => c.method === "POST"), waits };
+}
+
+function check(name, condition, detail) {
+  if (condition) ok(name);
+  else fail(name, detail);
+}
+
+async function testDeepLErrorPaths() {
+  console.log("\nDeepL error paths (mocked HTTP)");
+  const okBody = JSON.stringify({ translations: [{ detected_source_language: "ES", text: "hello" }] });
+
+  const forbidden = await deeplCase([{ status: 403, body: JSON.stringify({ message: "Forbidden" }) }]);
+  check("403 makes exactly one POST", forbidden.posts.length === 1, `POSTs: ${forbidden.posts.length}`);
+  check("403 says the key is bad", /rejected the API key \(403\)/.test(forbidden.message || ""), forbidden.message);
+
+  const wrong = await deeplCase([{ status: 404, body: "" }, { status: 200, body: okBody }]);
+  check("404 falls back to the other server", wrong.message === null && wrong.posts.length === 2 &&
+    wrong.posts[0].url.includes("api-free.deepl.com") && wrong.posts[1].url.includes("://api.deepl.com"),
+    JSON.stringify(wrong));
+
+  const offline = await deeplCase([{ offline: true }]);
+  const html429 = await deeplCase([{ status: 429, body: "<html>Too Many Requests</html>" }]);
+  const empty503 = await deeplCase([{ status: 503, body: "" }]);
+  const messages = [offline.message, html429.message, empty503.message];
+  check("offline gives a connection message", /Could not reach DeepL/.test(offline.message || ""), offline.message);
+  check("503 empty body gives an unavailable message", /temporarily unavailable \(HTTP 503\)/.test(empty503.message || ""), empty503.message);
+  check("429 HTML body gives a rate-limit message", /rate-limiting, try again in a minute/.test(html429.message || ""), html429.message);
+  check("offline/503/429 never say parse error", messages.every((m) => m && !/Could not parse/.test(m)), JSON.stringify(messages));
+  check("offline/503/429 messages are distinct", new Set(messages).size === 3, JSON.stringify(messages));
+  check("offline/503 make one POST, no fallback", offline.posts.length === 1 && empty503.posts.length === 1,
+    `${offline.posts.length}/${empty503.posts.length}`);
+
+  check("429 twice = 2 POSTs on same server", html429.posts.length === 2 &&
+    html429.posts.every((c) => c.url === html429.posts[0].url), JSON.stringify(html429.posts));
+  check("429 without Retry-After waits 2s", JSON.stringify(html429.waits) === "[2]", JSON.stringify(html429.waits));
+
+  const retryOk = await deeplCase([{ status: 429, body: "{}", headers: { "Retry-After": "3" } }, { status: 200, body: okBody }]);
+  check("429 then 200 succeeds on retry", retryOk.message === null && retryOk.posts.length === 2, JSON.stringify(retryOk));
+  check("429 honors Retry-After seconds", JSON.stringify(retryOk.waits) === "[3]", JSON.stringify(retryOk.waits));
+
+  const retry404 = await deeplCase([{ status: 429, body: "" }, { status: 404, body: "" }, { status: 200, body: okBody }]);
+  check("429 never exceeds 2 POSTs (no fallback after retry)", retry404.posts.length === 2, `POSTs: ${retry404.posts.length}`);
+}
+
+async function testElevenLabs401() {
+  console.log("\nElevenLabs key check (mocked HTTP)");
+  const { Shared } = loadSharedWithRequests([{ status: 401, body: JSON.stringify({ detail: { message: "Invalid API key" } }) }]);
+  let message = null;
+  try { await Shared.verifyElevenLabsKey("bogus"); } catch (error) { message = error.message; }
+  check("ElevenLabs 401 says key invalid", /rejected the API key \(401\)/.test(message || "") && !/voice list/.test(message || ""), message);
+}
+
+async function testInstallerNon2xx() {
+  console.log("\nInstaller download (mocked HTTP)");
+  for (const status of [404, 500]) {
+    const { Request } = makeRequestMock([{ status, body: "x".repeat(5000) + " SmartTranslate async function main" }]);
+    const writes = [];
+    const alerts = [];
+    class Alert {
+      addAction() {}
+      async presentAlert() { alerts.push(`${this.title} | ${this.message}`); return 0; }
+    }
+    const fm = {
+      documentsDirectory: () => "/docs",
+      joinPath: (a, b) => `${a}/${b}`,
+      fileExists: () => false,
+      writeString: (p) => writes.push(p),
+      remove() {}
+    };
+    let completed = false;
+    const installer = {
+      title: "T", deleteSelf: true, runAfterInstall: false, confirmOverwrite: true,
+      items: [{ scriptName: "SmartTranslate", label: "SmartTranslate", url: "https://example.com/SmartTranslate.js", minBytes: 10 }]
+    };
+    const code = `(async()=>{ const INSTALLER = ${JSON.stringify(installer)};\n${read("scripts/ScriptInstall.runtime.js")} })()`;
+    await vm.runInNewContext(code, {
+      Request, Alert, console,
+      FileManager: { iCloud: () => fm, local: () => fm },
+      Script: { name: () => "Installer", complete() { completed = true; } },
+      Safari: { open() {} }
+    });
+    check(`installer HTTP ${status} does not save`, writes.length === 0, JSON.stringify(writes));
+    check(`installer HTTP ${status} shows an Install failed alert`,
+      alerts.some((a) => a.startsWith("Install failed") && a.includes(`HTTP ${status}`)), JSON.stringify(alerts));
+    check(`installer HTTP ${status} still completes`, completed, "Script.complete not called");
+  }
+}
+
 function testOptionalDeepL() {
   console.log("\nDeepL (optional)");
   const key = process.env.DEEPL_API_KEY || "";
@@ -438,6 +567,9 @@ async function main() {
   testBundleRegressionGuards();
   await testBundleTailCompletes();
   testFileManagerFallback();
+  await testDeepLErrorPaths();
+  await testElevenLabs401();
+  await testInstallerNon2xx();
   testOptionalDeepL();
 
   console.log(`\n${passed} passed, ${failed} failed`);
