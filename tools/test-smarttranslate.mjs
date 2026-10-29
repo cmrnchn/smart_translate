@@ -365,7 +365,7 @@ async function testBundleTailCompletes() {
     }
     if (completed) ok(`${rel} Script.complete runs when main throws`);
     else fail(`${rel} Script.complete runs when main throws`, "not called");
-    if (alerts.length === 1 && alerts[0].startsWith("Couldn't finish translating | Check your connection and keys") &&
+    if (alerts.length === 1 && alerts[0].startsWith("SmartTranslate hit an error | Check your connection and keys") &&
       alerts[0].endsWith("\n\nboom from main")) ok(`${rel} shows error alert`);
     else fail(`${rel} shows error alert`, JSON.stringify(alerts));
   }
@@ -497,7 +497,7 @@ async function testDeepLErrorPaths() {
 
 async function testElevenLabs401() {
   console.log("\nElevenLabs key check (mocked HTTP)");
-  const keyInvalid = /^ElevenLabs rejected the API key, so it's invalid\..*\n\nCode 401$/s;
+  const keyInvalid = /^ElevenLabs didn't accept your API key\..*\n\nCode 401$/s;
   const { Shared } = loadSharedWithRequests([{ status: 401, body: JSON.stringify({ detail: { message: "Invalid API key" } }) }]);
   let message = null;
   try { await Shared.verifyElevenLabsKey("bogus"); } catch (error) { message = error.message; }
