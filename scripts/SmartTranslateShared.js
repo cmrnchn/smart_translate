@@ -1220,6 +1220,146 @@ async function dictateText(config) {
 }
 
 // ============================================================
+// FREE / PRO GATING
+// ============================================================
+//
+// Free = Quick + Talk. Pro = Library + People + Search.
+//
+// PRO_GATING_ENABLED is the release switch, and it ships OFF. While Pro is
+// free in the public installer nothing is locked, so every current user
+// keeps what they have today.
+//
+// How the flag resolves (first match wins):
+//   1. The Pro script (SmartTranslatePro) is always Pro.
+//   2. config.flags.proGating === true  → this device shows the Pro locks.
+//   3. config.flags.proGating === false → this device never shows them.
+//   4. Otherwise PRO_GATING_ENABLED decides (false today = unlocked).
+//
+// config.flags.proGating is what Settings → "Preview Free Tier" toggles in
+// the SmartTranslate (free) script. A release that starts charging for Pro
+// flips PRO_GATING_ENABLED to true and rebuilds the bundles.
+const PRO_GATING_ENABLED = false;
+const FREE_FEATURES = ["quick", "talk"];
+const PRO_FEATURES = ["library", "people", "search"];
+
+const PRO_NOTES = {
+  library: {
+    title: "This is in Pro",
+    message:
+      "Library keeps every Talk you finish so you can reread, star, and export it.\n\n" +
+      "Open the SmartTranslatePro script to use Library."
+  },
+  people: {
+    title: "This is in Pro",
+    message:
+      "People remembers who you talk with and keeps their past chats together.\n\n" +
+      "Open the SmartTranslatePro script to use People."
+  },
+  search: {
+    title: "This is in Pro",
+    message:
+      "Search finds any saved Talk by person, word, or tag.\n\n" +
+      "Open the SmartTranslatePro script to search."
+  }
+};
+
+const EMPTY_STATES = {
+  library: {
+    title: "No saved chats yet",
+    message:
+      "Finished Talks are saved here.\n\nStart one from Talk, then choose End Conversation to save it."
+  },
+  people: {
+    title: "No people yet",
+    message:
+      "People you talk with show up here.\n\nStart a Talk and add the person's name to save them."
+  },
+  search: {
+    title: "Nothing to search yet",
+    message:
+      "Search looks through saved chats.\n\nEnd your first Talk to save it, then search it here."
+  },
+  favorites: {
+    title: "No favorites yet",
+    message: "Star a chat when you save it and it shows up here."
+  }
+};
+
+function getProGatingOverride(config) {
+  const value = config && config.flags ? config.flags.proGating : undefined;
+  return typeof value === "boolean" ? value : null;
+}
+
+function isProGatingOn(config) {
+  const override = getProGatingOverride(config);
+  return override === null ? PRO_GATING_ENABLED : override;
+}
+
+/**
+ * bundle: "free" (SmartTranslate) or "pro" (SmartTranslatePro).
+ * Returns "pro" or "free".
+ */
+function resolveTier(bundle, config) {
+  if (bundle === "pro") {
+    return "pro";
+  }
+  return isProGatingOn(config) ? "free" : "pro";
+}
+
+function isFeatureLocked(feature, tier) {
+  return tier === "free" && PRO_FEATURES.includes(feature);
+}
+
+function getLockedFeatures(tier) {
+  const locked = {};
+  for (const feature of PRO_FEATURES) {
+    locked[feature] = isFeatureLocked(feature, tier);
+  }
+  return locked;
+}
+
+function getProNote(feature) {
+  return PRO_NOTES[feature] || PRO_NOTES.library;
+}
+
+function getEmptyState(surface) {
+  return EMPTY_STATES[surface] || EMPTY_STATES.library;
+}
+
+async function showNotice(title, message, variant) {
+  const ui = getUIModule();
+  if (ui?.presentMessage) {
+    try {
+      await ui.presentMessage(title, message, { variant: variant || "info" });
+      return;
+    } catch (error) {
+      console.error(`WebView notice UI failed: ${error.message}`);
+    }
+  }
+  const alert = new Alert();
+  alert.title = title;
+  alert.message = message;
+  alert.addAction("OK");
+  await alert.presentAlert();
+}
+
+async function showProNote(feature) {
+  const note = getProNote(feature);
+  await showNotice(note.title, note.message, "pro");
+}
+
+async function showEmptyState(surface) {
+  const state = getEmptyState(surface);
+  await showNotice(state.title, state.message, "info");
+}
+
+function setProGatingPreview(config, enabled) {
+  const next = deepMerge(config || {}, {});
+  next.flags = { ...(next.flags || {}), proGating: !!enabled };
+  return next;
+}
+
+// ============================================================
 // UI HELPERS
 // ============================================================
 
@@ -1589,6 +1729,19 @@ module.exports = {
   dictateText,
   showError,
   showSuccess,
+  showNotice,
+  PRO_GATING_ENABLED,
+  FREE_FEATURES,
+  PRO_FEATURES,
+  isProGatingOn,
+  resolveTier,
+  isFeatureLocked,
+  getLockedFeatures,
+  getProNote,
+  getEmptyState,
+  showProNote,
+  showEmptyState,
+  setProGatingPreview,
   presentTableMenu,
   promptForText,
   confirm,

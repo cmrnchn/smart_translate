@@ -8,6 +8,10 @@
 //   Talk         → multi-turn session (separate module)
 //   Settings     → languages, API keys, speech engine
 //
+// Free vs Pro: this script is the free tier (Quick + Talk). Library, People,
+// and Search are Pro. Locks only show when Pro gating is on — see
+// PRO_GATING_ENABLED in SmartTranslateShared.js (ships off).
+//
 // Requires (same Scriptable folder):
 //   SmartTranslateShared.js
 //   SmartTranslateConversation.js
@@ -127,11 +131,9 @@ async function main() {
         await runShare(quickState);
         break;
       case "library":
-        await Conversation.runConversation(config, { forceAction: "history" });
-        break;
       case "people":
       case "search":
-        await showProSurfaceMessage(actionId);
+        await runProSurface(actionId, config);
         break;
       case "conversation":
         await Conversation.runConversation(config);
@@ -163,7 +165,10 @@ async function showMainMenu(config, quickState) {
     inputText.trim().length > 0 &&
     resultSourceText.trim().length > 0 &&
     inputText.trim() === resultSourceText.trim();
+  const tier = Shared.resolveTier("free", config);
   const context = {
+    tier,
+    locked: Shared.getLockedFeatures(tier),
     primaryLang: Shared.getLanguageDisplayName(config.languages.primary),
     conversationLang: Shared.getLanguageDisplayName(config.languages.conversation),
     primaryCode: Shared.normalizeLanguage(config.languages.primary),
@@ -322,12 +327,17 @@ async function runShare(quickState) {
   await Shared.showSuccess("Copied", "Sharing is unavailable here, so the translation was copied.");
 }
 
-async function showProSurfaceMessage(actionId) {
-  const label = actionId === "people" ? "People" : "Library search";
-  await Shared.showSuccess(
-    label,
-    `${label} lives in SmartTranslate Pro. Open SmartTranslatePro to use it.`
-  );
+// Library / People / Search from the free script's top bar.
+// Gating on  → "This is in Pro" note for all three.
+// Gating off → Library opens saved chats (as before); People and Search
+//              still live only in the Pro script, so they point there.
+async function runProSurface(actionId, config) {
+  const tier = Shared.resolveTier("free", config);
+  if (Shared.isFeatureLocked(actionId, tier) || actionId !== "library") {
+    await Shared.showProNote(actionId);
+    return;
+  }
+  await Conversation.runConversation(config, { forceAction: "history" });
 }
 
 // ============================================================
@@ -365,6 +375,14 @@ async function runSettingsMenu(config) {
               title: "Test Translation",
               subtitle: "Verify DeepL + speech",
               symbol: "checkmark.seal"
+            },
+            {
+              id: "free_preview",
+              title: "Preview Free Tier",
+              subtitle: Shared.isProGatingOn(config)
+                ? "On · Library, People, Search show Pro locks"
+                : "Off · nothing is locked",
+              symbol: "lock"
             }
           ]
         }
@@ -387,6 +405,9 @@ async function runSettingsMenu(config) {
       await Shared.runApiKeyWizard({ mode: "hub" });
     } else if (choice === "test") {
       await testConfiguration(config);
+    } else if (choice === "free_preview") {
+      config = Shared.setProGatingPreview(config, !Shared.isProGatingOn(config));
+      await Shared.saveConfig(config);
     }
   }
 }

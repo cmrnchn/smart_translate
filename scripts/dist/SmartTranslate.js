@@ -1226,6 +1226,146 @@ async function dictateText(config) {
 }
 
 // ============================================================
+// FREE / PRO GATING
+// ============================================================
+//
+// Free = Quick + Talk. Pro = Library + People + Search.
+//
+// PRO_GATING_ENABLED is the release switch, and it ships OFF. While Pro is
+// free in the public installer nothing is locked, so every current user
+// keeps what they have today.
+//
+// How the flag resolves (first match wins):
+//   1. The Pro script (SmartTranslatePro) is always Pro.
+//   2. config.flags.proGating === true  → this device shows the Pro locks.
+//   3. config.flags.proGating === false → this device never shows them.
+//   4. Otherwise PRO_GATING_ENABLED decides (false today = unlocked).
+//
+// config.flags.proGating is what Settings → "Preview Free Tier" toggles in
+// the SmartTranslate (free) script. A release that starts charging for Pro
+// flips PRO_GATING_ENABLED to true and rebuilds the bundles.
+const PRO_GATING_ENABLED = false;
+const FREE_FEATURES = ["quick", "talk"];
+const PRO_FEATURES = ["library", "people", "search"];
+
+const PRO_NOTES = {
+  library: {
+    title: "This is in Pro",
+    message:
+      "Library keeps every Talk you finish so you can reread, star, and export it.\n\n" +
+      "Open the SmartTranslatePro script to use Library."
+  },
+  people: {
+    title: "This is in Pro",
+    message:
+      "People remembers who you talk with and keeps their past chats together.\n\n" +
+      "Open the SmartTranslatePro script to use People."
+  },
+  search: {
+    title: "This is in Pro",
+    message:
+      "Search finds any saved Talk by person, word, or tag.\n\n" +
+      "Open the SmartTranslatePro script to search."
+  }
+};
+
+const EMPTY_STATES = {
+  library: {
+    title: "No saved chats yet",
+    message:
+      "Finished Talks are saved here.\n\nStart one from Talk, then choose End Conversation to save it."
+  },
+  people: {
+    title: "No people yet",
+    message:
+      "People you talk with show up here.\n\nStart a Talk and add the person's name to save them."
+  },
+  search: {
+    title: "Nothing to search yet",
+    message:
+      "Search looks through saved chats.\n\nEnd your first Talk to save it, then search it here."
+  },
+  favorites: {
+    title: "No favorites yet",
+    message: "Star a chat when you save it and it shows up here."
+  }
+};
+
+function getProGatingOverride(config) {
+  const value = config && config.flags ? config.flags.proGating : undefined;
+  return typeof value === "boolean" ? value : null;
+}
+
+function isProGatingOn(config) {
+  const override = getProGatingOverride(config);
+  return override === null ? PRO_GATING_ENABLED : override;
+}
+
+/**
+ * bundle: "free" (SmartTranslate) or "pro" (SmartTranslatePro).
+ * Returns "pro" or "free".
+ */
+function resolveTier(bundle, config) {
+  if (bundle === "pro") {
+    return "pro";
+  }
+  return isProGatingOn(config) ? "free" : "pro";
+}
+
+function isFeatureLocked(feature, tier) {
+  return tier === "free" && PRO_FEATURES.includes(feature);
+}
+
+function getLockedFeatures(tier) {
+  const locked = {};
+  for (const feature of PRO_FEATURES) {
+    locked[feature] = isFeatureLocked(feature, tier);
+  }
+  return locked;
+}
+
+function getProNote(feature) {
+  return PRO_NOTES[feature] || PRO_NOTES.library;
+}
+
+function getEmptyState(surface) {
+  return EMPTY_STATES[surface] || EMPTY_STATES.library;
+}
+
+async function showNotice(title, message, variant) {
+  const ui = getUIModule();
+  if (ui?.presentMessage) {
+    try {
+      await ui.presentMessage(title, message, { variant: variant || "info" });
+      return;
+    } catch (error) {
+      console.error(`WebView notice UI failed: ${error.message}`);
+    }
+  }
+  const alert = new Alert();
+  alert.title = title;
+  alert.message = message;
+  alert.addAction("OK");
+  await alert.presentAlert();
+}
+
+async function showProNote(feature) {
+  const note = getProNote(feature);
+  await showNotice(note.title, note.message, "pro");
+}
+
+async function showEmptyState(surface) {
+  const state = getEmptyState(surface);
+  await showNotice(state.title, state.message, "info");
+}
+
+function setProGatingPreview(config, enabled) {
+  const next = deepMerge(config || {}, {});
+  next.flags = { ...(next.flags || {}), proGating: !!enabled };
+  return next;
+}
+
+// ============================================================
 // UI HELPERS
 // ============================================================
 
@@ -1594,6 +1734,19 @@ return {
   dictateText,
   showError,
   showSuccess,
+  showNotice,
+  PRO_GATING_ENABLED,
+  FREE_FEATURES,
+  PRO_FEATURES,
+  isProGatingOn,
+  resolveTier,
+  isFeatureLocked,
+  getLockedFeatures,
+  getProNote,
+  getEmptyState,
+  showProNote,
+  showEmptyState,
+  setProGatingPreview,
   presentTableMenu,
   promptForText,
   confirm,
@@ -2229,7 +2382,7 @@ function getConversationFilePath(session) {
 async function showHistory() {
   const sessions = await loadAllSessions();
   if (sessions.length === 0) {
-    await Shared.showError("No saved conversations.");
+    await Shared.showEmptyState("library");
     return;
   }
 
@@ -2396,6 +2549,8 @@ const ICON_PATHS = {
     '<circle cx="9" cy="13" r="3.2"/><path d="M12.2 13H18v2.5M16 13v4"/>',
   pencil:
     '<path d="M5 19l2-1 9.5-9.5 2.5 2.5L9.5 20.5 5 19z"/><path d="M14.5 7.5l2.5 2.5"/>',
+  lock:
+    '<rect x="6" y="11" width="12" height="8.5" rx="2"/><path d="M8.5 11V8.5a3.5 3.5 0 0 1 7 0V11"/>',
   chat:
     '<path d="M5.5 6.5h11a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H10l-3 3v-3h-1.5a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2z"/>'
 };
@@ -2428,7 +2583,8 @@ const SYMBOL_ICON = {
   key: "key",
   "checkmark.seal": "check",
   pencil: "pencil",
-  "character.bubble": "chat"
+  "character.bubble": "chat",
+  lock: "lock"
 };
 
 const TINT_CLASSES = ["blue", "green", "purple", "orange", "slate"];
@@ -2623,6 +2779,11 @@ const UI_STYLES = `
   .msg-card { flex-direction: column; align-items: stretch; gap: 10px; }
   .msg-card.error { border-color: rgba(248, 113, 113, 0.35); }
   .msg-card.success { border-color: rgba(52, 211, 153, 0.35); }
+  .msg-card.pro { border-color: rgba(243, 238, 228, 0.55); }
+  .msg-kicker {
+    align-self: flex-start; font-size: 11px; font-weight: 800; letter-spacing: 0.08em;
+    padding: 3px 9px; border-radius: 999px; background: #f3eee4; color: #111;
+  }
   .msg-body { font-size: 15px; line-height: 1.45; color: var(--text-secondary); white-space: pre-wrap; }
   .btn-stack { display: flex; flex-direction: column; gap: 8px; width: 100%; }
   .btn-row { justify-content: center; font-size: 16px; font-weight: 650; }
@@ -2679,6 +2840,14 @@ const UI_STYLES = `
     padding: 0; font-size: 8px; letter-spacing: 0.02em;
   }
   .quick-chrome-btn .ui-icon svg { width: 20px; height: 20px; stroke: #fff; stroke-width: 1.7; }
+  .quick-chrome-btn { position: relative; }
+  .quick-chrome-btn.locked { color: #7d7d7d; }
+  .quick-chrome-btn.locked .ui-icon svg { stroke: #7d7d7d; }
+  .pro-tag {
+    position: absolute; top: -6px; right: -10px; font-size: 7px; font-weight: 800;
+    letter-spacing: 0.06em; padding: 1px 4px; border-radius: 6px;
+    background: #f3eee4; color: #111;
+  }
   .quick-brand-wrap { text-align: center; min-width: 0; }
   .quick-brand { font-size: 17px; font-weight: 700; letter-spacing: -0.02em; }
   .quick-langs { display: flex; justify-content: center; gap: 6px; margin-top: 6px; }
@@ -2829,6 +2998,7 @@ function buildMessageHTML({ title, message, variant, actions }) {
     ${renderTopbar("SmartTranslate", null)}
     ${renderPageHeader(title, null)}
     <div class="msg-card ${escapeHtml(variant || "info")}">
+      ${variant === "pro" ? '<span class="msg-kicker">PRO</span>' : ""}
       <div class="msg-body">${escapeHtml(message)}</div>
       <div class="btn-stack">${buttons}</div>
     </div>
@@ -3016,8 +3186,18 @@ function buildProHomeHTML(context) {
   return wrapDocument("SmartTranslate Pro", body);
 }
 
+// Top-bar button. Locked (free tier with gating on) = dimmed with a PRO tag;
+// still tappable so the "This is in Pro" note can explain it.
+function renderChromeButton(action, label, isLocked) {
+  const cls = isLocked ? "quick-chrome-btn locked" : "quick-chrome-btn";
+  const tag = isLocked ? '<span class="pro-tag">PRO</span>' : "";
+  const aria = isLocked ? ` aria-label="${escapeHtml(label)} (Pro)"` : "";
+  return `<button type="button" class="${cls}" data-action="${escapeHtml(action)}"${aria}>${renderIcon(action)}${tag}<span>${escapeHtml(label)}</span></button>`;
+}
+
 function buildV1HomeHTML(context) {
   const c = context || {};
+  const locked = c.locked || {};
   const primaryCode = escapeHtml(c.primaryCode || "EN");
   const conversationCode = escapeHtml(c.conversationCode || "ES");
   const rawInputText = String(c.inputText || "");
@@ -3038,8 +3218,8 @@ function buildV1HomeHTML(context) {
     </div>
     <div class="quick-header">
       <div class="quick-icons">
-        <button type="button" class="quick-chrome-btn" data-action="library">${renderIcon("library")}<span>Library</span></button>
-        <button type="button" class="quick-chrome-btn" data-action="people">${renderIcon("people")}<span>People</span></button>
+        ${renderChromeButton("library", "Library", locked.library)}
+        ${renderChromeButton("people", "People", locked.people)}
       </div>
       <div class="quick-brand-wrap">
         <div class="quick-brand">SmartTranslate</div>
@@ -3049,8 +3229,8 @@ function buildV1HomeHTML(context) {
         </div>
       </div>
       <div class="quick-icons right">
-        <button type="button" class="quick-chrome-btn" data-action="search">${renderIcon("search")}<span>Search</span></button>
-        <button type="button" class="quick-chrome-btn" data-action="settings">${renderIcon("settings")}<span>Settings</span></button>
+        ${renderChromeButton("search", "Search", locked.search)}
+        ${renderChromeButton("settings", "Settings", false)}
       </div>
     </div>
 
@@ -3168,7 +3348,9 @@ async function presentMessage(title, message, options) {
     variant: opts.variant || "info",
     actions: opts.actions || [{ id: "ok", label: "OK", primary: true }]
   });
-  await presentScreen(html);
+  const raw = await presentScreen(html);
+  const parsed = parseCompletion(raw);
+  return parsed ? parsed.a : null;
 }
 
 async function presentConfirm(title, message) {
@@ -3324,6 +3506,8 @@ return {
   buildProHomeHTML,
   buildV1HomeHTML,
   buildListMenuHTML,
+  buildMessageHTML,
+  renderChromeButton,
   presentScreen,
   presentTableMenu,
   presentMessage,
@@ -3349,6 +3533,10 @@ return {
 //   Dictate      → speech → translate once → speak
 //   Talk         → multi-turn session (separate module)
 //   Settings     → languages, API keys, speech engine
+//
+// Free vs Pro: this script is the free tier (Quick + Talk). Library, People,
+// and Search are Pro. Locks only show when Pro gating is on — see
+// PRO_GATING_ENABLED in SmartTranslateShared.js (ships off).
 //
 // Requires (same Scriptable folder):
 //   SmartTranslateShared.js
@@ -3439,11 +3627,9 @@ async function main() {
         await runShare(quickState);
         break;
       case "library":
-        await Conversation.runConversation(config, { forceAction: "history" });
-        break;
       case "people":
       case "search":
-        await showProSurfaceMessage(actionId);
+        await runProSurface(actionId, config);
         break;
       case "conversation":
         await Conversation.runConversation(config);
@@ -3475,7 +3661,10 @@ async function showMainMenu(config, quickState) {
     inputText.trim().length > 0 &&
     resultSourceText.trim().length > 0 &&
     inputText.trim() === resultSourceText.trim();
+  const tier = Shared.resolveTier("free", config);
   const context = {
+    tier,
+    locked: Shared.getLockedFeatures(tier),
     primaryLang: Shared.getLanguageDisplayName(config.languages.primary),
     conversationLang: Shared.getLanguageDisplayName(config.languages.conversation),
     primaryCode: Shared.normalizeLanguage(config.languages.primary),
@@ -3634,12 +3823,17 @@ async function runShare(quickState) {
   await Shared.showSuccess("Copied", "Sharing is unavailable here, so the translation was copied.");
 }
 
-async function showProSurfaceMessage(actionId) {
-  const label = actionId === "people" ? "People" : "Library search";
-  await Shared.showSuccess(
-    label,
-    `${label} lives in SmartTranslate Pro. Open SmartTranslatePro to use it.`
-  );
+// Library / People / Search from the free script's top bar.
+// Gating on  → "This is in Pro" note for all three.
+// Gating off → Library opens saved chats (as before); People and Search
+//              still live only in the Pro script, so they point there.
+async function runProSurface(actionId, config) {
+  const tier = Shared.resolveTier("free", config);
+  if (Shared.isFeatureLocked(actionId, tier) || actionId !== "library") {
+    await Shared.showProNote(actionId);
+    return;
+  }
+  await Conversation.runConversation(config, { forceAction: "history" });
 }
 
 // ============================================================
@@ -3677,6 +3871,14 @@ async function runSettingsMenu(config) {
               title: "Test Translation",
               subtitle: "Verify DeepL + speech",
               symbol: "checkmark.seal"
+            },
+            {
+              id: "free_preview",
+              title: "Preview Free Tier",
+              subtitle: Shared.isProGatingOn(config)
+                ? "On · Library, People, Search show Pro locks"
+                : "Off · nothing is locked",
+              symbol: "lock"
             }
           ]
         }
@@ -3699,6 +3901,9 @@ async function runSettingsMenu(config) {
       await Shared.runApiKeyWizard({ mode: "hub" });
     } else if (choice === "test") {
       await testConfiguration(config);
+    } else if (choice === "free_preview") {
+      config = Shared.setProGatingPreview(config, !Shared.isProGatingOn(config));
+      await Shared.saveConfig(config);
     }
   }
 }
