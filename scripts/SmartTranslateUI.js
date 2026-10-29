@@ -699,13 +699,17 @@ function buildV1HomeHTML(context) {
   const c = context || {};
   const primaryCode = escapeHtml(c.primaryCode || "EN");
   const conversationCode = escapeHtml(c.conversationCode || "ES");
-  const inputText = escapeHtml(c.inputText || "");
-  const resultText = String(c.resultText || "").trim();
-  const meansText = String(c.meansText || "").trim();
+  const rawInputText = String(c.inputText || "");
+  const inputText = escapeHtml(rawInputText);
+  const hasInputText = rawInputText.trim().length > 0;
+  const resultText = hasInputText ? String(c.resultText || "").trim() : "";
+  const originalText = resultText ? String(c.meansText || "").trim() : "";
   const resultMain = resultText
     ? escapeHtml(resultText)
     : `<span class="quick-result-empty">Translation appears here</span>`;
-  const means = meansText ? `Means: ${meansText}` : "Means:";
+  const resultMeta = originalText
+    ? `<div class="quick-result-means">Original: ${escapeHtml(originalText)}</div>`
+    : "";
   const body = `<div class="quick-app">
     <div class="quick-status">
       <span>9:41</span>
@@ -741,7 +745,7 @@ function buildV1HomeHTML(context) {
     <section class="quick-result-card" aria-label="Translation result">
       <div class="quick-result-label">RESULT</div>
       <div class="quick-result-main">${resultMain}</div>
-      <div class="quick-result-means">${escapeHtml(means)}</div>
+      ${resultMeta}
     </section>
 
     <div class="quick-actions">
@@ -780,8 +784,8 @@ async function waitForTapAction(webView) {
         event.preventDefault();
         document.removeEventListener("click", handler, true);
         var action = target.getAttribute("data-action") || "";
-        if (action === "send") {
-          var input = document.getElementById("st-quick-input");
+        var input = document.getElementById("st-quick-input");
+        if (input) {
           completion(JSON.stringify({ a: action, v: input ? input.value : "" }));
           return;
         }
@@ -985,9 +989,9 @@ async function presentProHome(context) {
 async function presentV1Home(context) {
   const raw = await presentScreen(buildV1HomeHTML(context));
   const parsed = parseCompletion(raw);
-  if (parsed && parsed.a === "send") {
+  if (parsed && Object.prototype.hasOwnProperty.call(parsed, "v")) {
     return {
-      action: "send",
+      action: parsed.a,
       text: String(parsed.v || "")
     };
   }
