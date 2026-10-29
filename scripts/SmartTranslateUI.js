@@ -75,6 +75,8 @@ const ICON_PATHS = {
     '<circle cx="9" cy="13" r="3.2"/><path d="M12.2 13H18v2.5M16 13v4"/>',
   pencil:
     '<path d="M5 19l2-1 9.5-9.5 2.5 2.5L9.5 20.5 5 19z"/><path d="M14.5 7.5l2.5 2.5"/>',
+  swap:
+    '<path d="M7 4.5v13M7 4.5L4.5 7M7 4.5L9.5 7"/><path d="M17 19.5v-13M17 19.5l-2.5-2.5M17 19.5l2.5-2.5"/>',
   lock:
     '<rect x="6" y="11" width="12" height="8.5" rx="2"/><path d="M8.5 11V8.5a3.5 3.5 0 0 1 7 0V11"/>',
   chat:
@@ -441,6 +443,59 @@ const UI_STYLES = `
     padding: 10px 8px;
   }
   .quick-tab-active .ui-icon svg, .quick-tab-link .ui-icon svg { width: 18px; height: 18px; }
+  .talk-stage {
+    flex: 1; min-height: 0; background: #f3eee4; color: #111; border-radius: 28px;
+    display: flex; flex-direction: column; margin: 4px 0 12px; overflow: hidden;
+  }
+  .talk-panel {
+    appearance: none; border: 0; background: transparent; color: #111; text-align: left;
+    flex: 1; min-height: 0; padding: 16px 18px; display: flex; flex-direction: column;
+    overflow: hidden; font: inherit;
+  }
+  .talk-panel.active { background: #fbf8f2; }
+  .talk-who {
+    display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 800;
+    letter-spacing: 0.05em; color: #555; margin-bottom: 8px;
+  }
+  .talk-said {
+    font-size: 22px; font-weight: 800; line-height: 1.2; letter-spacing: -0.02em;
+    overflow-wrap: anywhere; overflow: hidden; display: -webkit-box;
+    -webkit-line-clamp: 4; -webkit-box-orient: vertical;
+  }
+  .talk-said.empty { color: #9a958c; font-size: 17px; font-weight: 600; }
+  .talk-means {
+    font-size: 13px; color: #6b6660; line-height: 1.35; margin-top: 8px;
+    overflow-wrap: anywhere; overflow: hidden; display: -webkit-box;
+    -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  }
+  .talk-speaking {
+    margin-top: auto; padding-top: 8px; display: flex; align-items: center; gap: 6px;
+    color: #1a9b4a; font-size: 11px; font-weight: 800; letter-spacing: 0.06em;
+  }
+  .talk-speaking .dot { width: 8px; height: 8px; border-radius: 50%; background: #1a9b4a; }
+  .talk-controls {
+    display: grid; grid-template-columns: 1fr 92px 1fr; align-items: center; gap: 8px;
+    padding: 6px 12px; border-top: 1px solid rgba(0,0,0,0.06); border-bottom: 1px solid rgba(0,0,0,0.06);
+  }
+  .talk-side-btn {
+    appearance: none; border: 1px solid rgba(0,0,0,0.12); background: #e4dfd4; color: #111;
+    border-radius: 16px; padding: 10px 6px; font-size: 12px; font-weight: 700;
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+  }
+  .talk-side-btn .ui-icon svg { width: 18px; height: 18px; }
+  .talk-mic {
+    appearance: none; border: 0; width: 86px; height: 86px; border-radius: 50%;
+    background: #000; color: #f3eee4; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 3px; text-align: center;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35); padding: 6px;
+  }
+  .talk-mic .ui-icon svg { width: 22px; height: 22px; stroke: #f3eee4; }
+  .talk-mic .t1 { font-size: 9px; font-weight: 800; letter-spacing: 0.04em; line-height: 1.1; }
+  .talk-mic .t2 { font-size: 8px; opacity: 0.75; line-height: 1.1; }
+  .talk-error {
+    background: #3a1414; color: #fecaca; border-radius: 14px; padding: 10px 12px;
+    font-size: 13px; line-height: 1.35; margin-bottom: 10px;
+  }
 `;
 
 function wrapDocument(pageTitle, bodyHtml, bodyClass) {
@@ -1015,6 +1070,97 @@ async function presentProHome(context) {
   return parsed.a;
 }
 
+// ------------------------------------------------------------
+// TALK (free): two people, one phone. The active speaker's panel shows
+// SPEAKING; the mic dictates in their language and speaks the translation
+// in the other person's language. "Switch" (or tapping a panel) flips who
+// is talking.
+// ------------------------------------------------------------
+
+function renderTalkPanel(side, panel, isActive) {
+  const p = panel || {};
+  const code = escapeHtml(String(p.code || "").toUpperCase().split("-")[0]);
+  const label = escapeHtml(p.label || (side === "me" ? "You" : "Them"));
+  const text = String(p.text || "").trim();
+  const means = String(p.means || "").trim();
+  const said = text
+    ? `<div class="talk-said">${escapeHtml(text)}</div>`
+    : `<div class="talk-said empty">${escapeHtml(p.placeholder || "")}</div>`;
+  const meansHtml = means ? `<div class="talk-means">Means: ${escapeHtml(means)}</div>` : "";
+  const speaking = isActive
+    ? `<div class="talk-speaking"><span class="dot"></span> SPEAKING</div>`
+    : "";
+  return `<button type="button" class="talk-panel${isActive ? " active" : ""}" data-action="side-${side}" aria-pressed="${isActive ? "true" : "false"}">
+      <div class="talk-who"><span class="flag">${flagForCode(p.code)}</span> ${label.toUpperCase()} · ${code}</div>
+      ${said}
+      ${meansHtml}
+      ${speaking}
+    </button>`;
+}
+
+function buildTalkHTML(context) {
+  const c = context || {};
+  const locked = c.locked || {};
+  const me = c.me || {};
+  const them = c.them || {};
+  const active = c.active === "them" ? "them" : "me";
+  const activePanel = active === "me" ? me : them;
+  const activeName = escapeHtml(activePanel.label || (active === "me" ? "You" : "Them"));
+  const meCode = escapeHtml(String(me.code || "EN").toUpperCase().split("-")[0]);
+  const themCode = escapeHtml(String(them.code || "ES").toUpperCase().split("-")[0]);
+  const error = c.error
+    ? `<div class="talk-error" role="alert">${escapeHtml(c.error)}</div>`
+    : "";
+  const body = `<div class="quick-app talk-app">
+    <div class="quick-status">
+      <span>9:41</span>
+      <div class="quick-status-right"><span>••••</span><span>Wi-Fi</span><span>100%</span></div>
+    </div>
+    <div class="quick-header">
+      <div class="quick-icons">
+        ${renderChromeButton("library", "Library", locked.library)}
+        ${renderChromeButton("people", "People", locked.people)}
+      </div>
+      <div class="quick-brand-wrap">
+        <div class="quick-brand">SmartTranslate</div>
+        <div class="quick-langs">
+          <span class="quick-pill ${active === "me" ? "lit" : "dim"}">${meCode}</span>
+          <span class="quick-pill ${active === "them" ? "lit" : "dim"}">${themCode}</span>
+        </div>
+      </div>
+      <div class="quick-icons right">
+        ${renderChromeButton("search", "Search", locked.search)}
+        ${renderChromeButton("settings", "Settings", false)}
+      </div>
+    </div>
+    <div class="talk-stage">
+      ${renderTalkPanel("them", them, active === "them")}
+      <div class="talk-controls">
+        <button type="button" class="talk-side-btn" data-action="switch">${renderIcon("swap")}<span>Switch</span></button>
+        <button type="button" class="talk-mic" data-action="speak" aria-label="Tap to speak as ${activeName}">
+          ${renderIcon("dictate")}
+          <span class="t1">TAP TO<br>SPEAK</span>
+          <span class="t2">${activeName}</span>
+        </button>
+        <button type="button" class="talk-side-btn" data-action="type">${renderIcon("type")}<span>Type</span></button>
+      </div>
+      ${renderTalkPanel("me", me, active === "me")}
+    </div>
+    ${error}
+    <nav class="quick-tabs" aria-label="SmartTranslate modes">
+      <button type="button" class="quick-tab-link" data-action="quick">${renderIcon("pencil")}<span>Quick</span></button>
+      <button type="button" class="quick-tab-active" data-action="talk">${renderIcon("chat")}<span>Talk</span></button>
+    </nav>
+  </div>`;
+  return wrapDocument("SmartTranslate Talk", body, "quick-screen-body");
+}
+
+async function presentTalk(context) {
+  const raw = await presentScreen(buildTalkHTML(context));
+  const parsed = parseCompletion(raw);
+  return parsed ? parsed.a : null;
+}
+
 async function presentV1Home(context) {
   const raw = await presentScreen(buildV1HomeHTML(context));
   const parsed = parseCompletion(raw);
@@ -1032,6 +1178,7 @@ module.exports = {
   renderIcon,
   buildProHomeHTML,
   buildV1HomeHTML,
+  buildTalkHTML,
   buildListMenuHTML,
   buildMessageHTML,
   renderChromeButton,
@@ -1047,5 +1194,6 @@ module.exports = {
   presentApiKeyDetail,
   presentProHome,
   presentV1Home,
+  presentTalk,
   resetSession
 };

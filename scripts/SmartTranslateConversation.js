@@ -22,7 +22,11 @@ const Shared = importModule("SmartTranslateShared");
 module.exports = {
   runConversation,
   loadAllSessions,
-  getConversationFilePath
+  getConversationFilePath,
+  runTalk,
+  createTalkState,
+  runTalkTurn,
+  setActiveSpeaker
 };
 
 // ============================================================
@@ -704,4 +708,211 @@ async function saveCompletedConversation(session) {
   const path = fm.joinPath(Shared.getConversationsDirectory(), filename);
   await Shared.saveJSON(path, session);
   return path;
+}
+
+// ============================================================
+// TALK (free tier): two people, one phone, nothing saved
+// ============================================================
+//
+// One screen, two panels. Whoever is marked SPEAKING taps the mic and talks
+// in their language; SmartTranslate translates into the other person's
+// language, shows it as "Means:" and speaks it out loud. The speaker then
+// flips automatically, and "Switch" (or tapping a panel) changes it by hand.
+// Talk keeps the conversation in memory only. Saving chats is Library (Pro).
+
+const TALK_EXIT_ACTIONS = ["quick", "library", "people", "search", "settings"];
+
+function createTalkState(config) {
+  const languages = config?.languages || {};
+  return {
+    active: "me",
+    error: "",
+    turns: 0,
+    sides: {
+      me: { label: "You", code: languages.primary || "EN-US", text: "", means: "" },
+      them: { label: "Them", code: languages.conversation || "ES", text: "", means: "" }
+    }
+  };
+}
+
+// If Settings changed the languages, start the panels fresh.
+function syncTalkLanguages(state, config) {
+  const fresh = createTalkState(config);
+  if (
+    state.sides.me.code !== fresh.sides.me.code ||
+    state.sides.them.code !== fresh.sides.them.code
+  ) {
+    return fresh;
+  }
+  return state;
+}
+
+function otherSide(side) {
+  return side === "me" ? "them" : "me";
+}
+
+function setActiveSpeaker(state, side) {
+  state.active = side === "them" ? "them" : "me";
+  state.error = "";
+  return state;
+}
+
+function talkPlaceholder(state, side) {
+  const panel = state.sides[side];
+  const language = Shared.getLanguageDisplayName(panel.code);
+  if (state.active === side) {
+    return side === "me"
+      ? `Tap the mic and speak ${language}.`
+      : `Hand over the phone. They tap the mic and speak ${language}.`;
+  }
+  return side === "me" ? "Your words show here." : "Their words show here.";
+}
+
+function buildTalkContext(state, options) {
+  const panel = (side) => ({
+    ...state.sides[side],
+    placeholder: talkPlaceholder(state, side)
+  });
+  return {
+    active: state.active,
+    me: panel("me"),
+    them: panel("them"),
+    error: state.error,
+    locked: options?.locked || {}
+  };
+}
+
+function shortError(error) {
+  const message = String(error?.message || error || "Something went wrong.");
+  // First line of the first two paragraphs: enough to act on, no keychain ids.
+  return message
+    .split("\n\n")
+    .slice(0, 2)
+    .map((part) => part.split("\n")[0].trim())
+    .filter(Boolean)
+    .join(" ");
+}
+
+/**
+ * One turn: the active speaker's text → the other side's language.
+ * Shows the result, speaks it, then hands the turn to the other person.
+ */
+async function runTalkTurn(state, config, text) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) {
+    return state;
+  }
+  const speaker = state.active;
+  const listener = otherSide(speaker);
+  const targetLanguage = state.sides[listener].code;
+
+  try {
+    const apiKey = Shared.getRequiredKey(Shared.DEEPL_KEYCHAIN_KEY, "DeepL");
+    const { translation } = await Shared.translateToTarget(
+      trimmed,
+      apiKey,
+      targetLanguage
+    );
+    state.sides[speaker].text = trimmed;
+    state.sides[speaker].means = translation;
+    state.error = "";
+    state.turns += 1;
+    try {
+      // ElevenLabs when configured, otherwise Apple speech.
+      await Shared.speakTranslation(translation, targetLanguage, config);
+    } catch (error) {
+      console.error(`Talk speech failed: ${error?.message || error}`);
+    }
+    state.active = listener;
+  } catch (error) {
+    state.error = shortError(error);
+  }
+  return state;
+}
+
+async function readTalkInput(state, mode) {
+  const panel = state.sides[state.active];
+  const language = Shared.getLanguageDisplayName(panel.code);
+  try {
+    if (mode === "type") {
+      return await Shared.promptForText(
+        `${panel.label} · ${language}`,
+        `Type what ${state.active === "me" ? "you want" : "they want"} to say.`
+      );
+    }
+    return await Shared.dictateInLanguage(panel.code);
+  } catch (error) {
+    // Cancelled dictation lands here; nothing to translate.
+    console.error(`Talk input cancelled: ${error?.message || error}`);
+    return null;
+  }
+}
+
+async function presentTalkScreen(state, options) {
+  const context = buildTalkContext(state, options);
+  const ui = options?.ui;
+  if (ui?.presentTalk) {
+    try {
+      return await ui.presentTalk(context);
+    } catch (error) {
+      console.error(`Talk WebView failed: ${error?.message || error}`);
+    }
+  }
+  const name = state.sides[state.active].label;
+  return await Shared.presentTableMenu({
+    title: "Talk",
+    subtitle: state.error || `${name} is speaking`,
+    sections: [
+      {
+        rows: [
+          { id: "speak", title: `Speak as ${name}`, subtitle: "Dictate, translate, speak", symbol: "mic" },
+          { id: "switch", title: "Switch speaker", subtitle: `Now: ${name}`, symbol: "person.2" },
+          { id: "type", title: "Type instead", subtitle: "Keyboard input", symbol: "keyboard" },
+          { id: "quick", title: "Back to Quick", subtitle: "One-shot translate", symbol: "pencil" }
+        ]
+      }
+    ]
+  });
+}
+
+/**
+ * Runs the Talk screen until the user leaves it.
+ * Returns { exit, state } where exit is "quick", "library", "people",
+ * "search", "settings", or "cancel" (sheet dismissed).
+ */
+async function runTalk(config, options = {}) {
+  let state = options.state
+    ? syncTalkLanguages(options.state, config)
+    : createTalkState(config);
+
+  while (true) {
+    const action = await presentTalkScreen(state, options);
+    if (!action || action === "cancel") {
+      return { exit: "cancel", state };
+    }
+    if (TALK_EXIT_ACTIONS.includes(action)) {
+      return { exit: action, state };
+    }
+    switch (action) {
+      case "speak":
+      case "type": {
+        const text = await readTalkInput(state, action);
+        if (text) {
+          await runTalkTurn(state, config, text);
+        }
+        break;
+      }
+      case "switch":
+        setActiveSpeaker(state, otherSide(state.active));
+        break;
+      case "side-me":
+        setActiveSpeaker(state, "me");
+        break;
+      case "side-them":
+        setActiveSpeaker(state, "them");
+        break;
+      default:
+        break;
+    }
+  }
 }
