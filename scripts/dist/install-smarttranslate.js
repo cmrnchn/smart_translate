@@ -51,7 +51,14 @@ function installerTitle() {
 }
 
 function getFileManager() {
-  return FileManager.iCloud();
+  // Prefer iCloud; fall back to on-device storage when iCloud is unavailable.
+  try {
+    const fm = FileManager.iCloud();
+    fm.documentsDirectory();
+    return fm;
+  } catch (error) {
+    return FileManager.local();
+  }
 }
 
 function sanitizeScriptName(name) {

@@ -76,7 +76,14 @@ const LANGUAGE_OPTIONS = [
 // ============================================================
 
 function getFileManager() {
-  return FileManager.iCloud();
+  // Prefer iCloud; fall back to on-device storage when iCloud is unavailable.
+  try {
+    const fm = FileManager.iCloud();
+    fm.documentsDirectory();
+    return fm;
+  } catch (error) {
+    return FileManager.local();
+  }
 }
 
 function getAppDirectory() {
@@ -3218,8 +3225,9 @@ return {
 // Requires (same Scriptable folder):
 //   SmartTranslateShared.js
 //   SmartTranslateConversation.js
+//   SmartTranslateUI.js
 //
-// Storage (iCloud documents):
+// Storage (iCloud documents; local documents if iCloud is unavailable):
 //   SmartTranslate/config.json
 //   SmartTranslate/people.json
 //   SmartTranslate/active_session.json
@@ -3232,9 +3240,10 @@ return {
 // Version: 1.0.0
 //
 // IMPORTANT (Scriptable):
-// Create THREE scripts with these EXACT names (no spaces, same capitalization):
+// Create FOUR scripts with these EXACT names (no spaces, same capitalization):
 //   SmartTranslateShared
 //   SmartTranslateConversation
+//   SmartTranslateUI
 //   SmartTranslate
 // Or paste the single-file bundle from scripts/dist/SmartTranslate.js instead.
 
@@ -3782,5 +3791,18 @@ async function testConfiguration(config) {
   }
 }
 
-await main();
-Script.complete();
+try {
+  await main();
+} catch (error) {
+  try {
+    const alert = new Alert();
+    alert.title = "SmartTranslate Error";
+    alert.message = String(error?.message || error || "Unknown error.");
+    alert.addAction("OK");
+    await alert.presentAlert();
+  } catch (alertError) {
+    console.error(`SmartTranslate error: ${error?.message || error}`);
+  }
+} finally {
+  Script.complete();
+}

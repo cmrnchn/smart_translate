@@ -76,7 +76,14 @@ const LANGUAGE_OPTIONS = [
 // ============================================================
 
 function getFileManager() {
-  return FileManager.iCloud();
+  // Prefer iCloud; fall back to on-device storage when iCloud is unavailable.
+  try {
+    const fm = FileManager.iCloud();
+    fm.documentsDirectory();
+    return fm;
+  } catch (error) {
+    return FileManager.local();
+  }
 }
 
 function getAppDirectory() {
@@ -4512,5 +4519,18 @@ async function testConfiguration(config) {
   }
 }
 
-await main();
-Script.complete();
+try {
+  await main();
+} catch (error) {
+  try {
+    const alert = new Alert();
+    alert.title = "SmartTranslate Error";
+    alert.message = String(error?.message || error || "Unknown error.");
+    alert.addAction("OK");
+    await alert.presentAlert();
+  } catch (alertError) {
+    console.error(`SmartTranslate error: ${error?.message || error}`);
+  }
+} finally {
+  Script.complete();
+}

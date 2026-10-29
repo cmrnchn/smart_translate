@@ -11,8 +11,9 @@
 // Requires (same Scriptable folder):
 //   SmartTranslateShared.js
 //   SmartTranslateConversation.js
+//   SmartTranslateUI.js
 //
-// Storage (iCloud documents):
+// Storage (iCloud documents; local documents if iCloud is unavailable):
 //   SmartTranslate/config.json
 //   SmartTranslate/people.json
 //   SmartTranslate/active_session.json
@@ -25,9 +26,10 @@
 // Version: 1.0.0
 //
 // IMPORTANT (Scriptable):
-// Create THREE scripts with these EXACT names (no spaces, same capitalization):
+// Create FOUR scripts with these EXACT names (no spaces, same capitalization):
 //   SmartTranslateShared
 //   SmartTranslateConversation
+//   SmartTranslateUI
 //   SmartTranslate
 // Or paste the single-file bundle from scripts/dist/SmartTranslate.js instead.
 
