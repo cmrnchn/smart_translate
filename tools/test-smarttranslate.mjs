@@ -412,7 +412,7 @@ function makeRequestMock(replies) {
   class Request {
     constructor(url) { this.url = url; this.method = "GET"; this.headers = {}; this.response = undefined; }
     _next() {
-      calls.push({ method: this.method, url: this.url });
+      calls.push({ method: this.method, url: this.url, body: this.body });
       const reply = replies.length > 1 ? replies.shift() : replies[0];
       if (reply.offline) {
         throw new Error("The Internet connection appears to be offline.");
@@ -691,7 +691,8 @@ async function testProNoteAndEmptyStateUI() {
   assertNotIncludes("unlocked home has no PRO tags", openHtml, 'class="pro-tag"');
 }
 
-async function runFreeEntryScript({ config, actions }) {
+async function runFreeEntryScript({ config, actions, talkExits: talkExitList }) {
+  const talkExits = [...(talkExitList || [])];
   const RealShared = loadScriptableModule("scripts/SmartTranslateShared.js");
   const log = { proNotes: [], emptyStates: [], conversations: [], contexts: [] };
   const queue = [...actions];
@@ -709,7 +710,13 @@ async function runFreeEntryScript({ config, actions }) {
   });
   const Conversation = {
     async runConversation(_config, options) {
-      log.conversations.push(options?.forceAction || "talk");
+      log.conversations.push(options?.forceAction || "named-session");
+    },
+    async runTalk(_config, options) {
+      log.conversations.push("talk");
+      log.talkOptions = options;
+      const next = talkExits.shift() || "quick";
+      return { exit: next, state: { marker: log.conversations.length } };
     }
   };
   const UI = {
@@ -791,6 +798,227 @@ async function testProKitEmptyStates() {
   check("empty states never use error styling", log.errors.length === 0, log.errors.join(" | "));
 }
 
+// ------------------------------------------------------------
+// Talk (free): two people, tap to speak, tap to switch speaker
+// ------------------------------------------------------------
+
+function talkContext(overrides = {}) {
+  return {
+    active: "me",
+    me: { label: "You", code: "EN-US", text: "", means: "", placeholder: "Tap the mic and speak English." },
+    them: { label: "Them", code: "ES", text: "", means: "", placeholder: "Their words show here." },
+    error: "",
+    locked: {},
+    ...overrides
+  };
+}
+
+function testTalkHtml() {
+  console.log("\nTalk screen HTML");
+  const UI = loadScriptableModule("scripts/SmartTranslateUI.js");
+  const first = UI.buildTalkHTML(talkContext());
+  for (const action of ["speak", "switch", "type", "side-me", "side-them", "quick", "settings"]) {
+    assertIncludes(`Talk has data-action="${action}"`, first, `data-action="${action}"`);
+  }
+  assertIncludes("Talk shows tap-to-speak mic", first, "TAP TO<br>SPEAK");
+  assertIncludes("first run shows how to start", first, "Tap the mic and speak English.");
+  assertIncludes("panel shows YOU · EN", first, "YOU · EN");
+  assertIncludes("panel shows THEM · ES", first, "THEM · ES");
+  const speakingCount = (first.match(/class="talk-speaking"/g) || []).length;
+  check("exactly one SPEAKING indicator", speakingCount === 1, `got ${speakingCount}`);
+  assertIncludes("me panel active by default", first, 'class="talk-panel active" data-action="side-me"');
+  assertNotIncludes("no Talk tab self-link to the old named-session flow", first, 'data-action="conversation"');
+
+  const flipped = UI.buildTalkHTML(
+    talkContext({
+      active: "them",
+      me: { label: "You", code: "EN-US", text: "See you tomorrow?", means: "¿Nos vemos mañana?" },
+      them: { label: "Them", code: "ES", text: "<b>Sí</b>", means: "Yes" },
+      error: "DeepL API key is missing."
+    })
+  );
+  assertIncludes("switched: them panel active", flipped, 'class="talk-panel active" data-action="side-them"');
+  assertIncludes("switched: mic names the speaker", flipped, 'aria-label="Tap to speak as Them"');
+  assertIncludes("shows Means: back-translation", flipped, "Means: ¿Nos vemos mañana?");
+  assertIncludes("escapes spoken text", flipped, "&lt;b&gt;Sí&lt;/b&gt;");
+  assertIncludes("shows turn error banner", flipped, 'class="talk-error"');
+  assertIncludes("ES pill lit when they speak", flipped, '<span class="quick-pill lit">ES</span>');
+
+  const locked = UI.buildTalkHTML(talkContext({ locked: { library: true, people: true, search: true } }));
+  check("Talk top bar shows PRO tags when locked", (locked.match(/class="pro-tag"/g) || []).length === 3);
+}
+
+async function testTalkPresentSwitch() {
+  console.log("\nTalk tap protocol");
+  class MockWebView {
+    async loadHTML(html) { this.html = html; }
+    present() { return new Promise(() => {}); }
+    async evaluateJavaScript() { return "switch"; }
+  }
+  const UI = loadUIWithMockWebView(MockWebView);
+  const action = await UI.presentTalk(talkContext());
+  check("presentTalk returns tapped action (switch)", action === "switch", String(action));
+}
+
+function loadTalkHarness({ dictations = [], typed = [], failKey = false, failTranslate = false } = {}) {
+  const RealShared = loadScriptableModule("scripts/SmartTranslateShared.js");
+  const log = { dictated: [], translated: [], spoken: [], prompts: 0 };
+  const dictationQueue = [...dictations];
+  const typedQueue = [...typed];
+  const Shared = Object.assign({}, RealShared, {
+    getRequiredKey() {
+      if (failKey) throw new Error("DeepL API key is missing.\n\nOpen Settings → API Keys to save it once.\nKeychain entry:\nx");
+      return "k:fx";
+    },
+    async dictateInLanguage(code) {
+      log.dictated.push(code);
+      const next = dictationQueue.shift();
+      if (next instanceof Error) throw next;
+      return next;
+    },
+    async promptForText() {
+      log.prompts += 1;
+      return typedQueue.shift() ?? null;
+    },
+    async translateToTarget(text, _key, target) {
+      if (failTranslate) throw new Error("DeepL quota exceeded.");
+      log.translated.push({ text, target });
+      return { translation: `[${target}] ${text}`, detectedLanguage: "X", targetLanguage: target };
+    },
+    async speakTranslation(text, lang) {
+      log.spoken.push({ text, lang });
+    }
+  });
+  const Conversation = loadScriptableModule("scripts/SmartTranslateConversation.js", {
+    importModule: () => Shared
+  });
+  return { Conversation, log };
+}
+
+const TALK_CONFIG = {
+  version: 1,
+  languages: { primary: "EN-US", conversation: "ES", defaultTarget: "EN-US" },
+  speech: { engine: "apple" }
+};
+
+async function testTalkFlow() {
+  console.log("\nTalk turn flow (mocked dictation/DeepL/speech)");
+  const { Conversation, log } = loadTalkHarness({
+    dictations: ["See you tomorrow?", "Sí, a las diez."],
+    typed: ["Perfect"]
+  });
+  const contexts = [];
+  const taps = ["speak", "speak", "switch", "switch", "type", "side-them", "quick"];
+  const ui = {
+    async presentTalk(context) {
+      contexts.push(JSON.parse(JSON.stringify(context)));
+      return taps.shift();
+    }
+  };
+  const result = await Conversation.runTalk(TALK_CONFIG, { ui, locked: { library: true } });
+
+  check("first screen: You are speaking", contexts[0].active === "me");
+  check("first screen: empty-state hint for You", /Tap the mic and speak English/.test(contexts[0].me.placeholder), contexts[0].me.placeholder);
+  check("locks passed through to Talk screen", contexts[0].locked.library === true);
+  check("You dictate in your language, they in theirs", log.dictated.join(",") === "EN-US,ES", log.dictated.join(","));
+  check(
+    "each turn translates to the listener's language",
+    log.translated.map((t) => t.target).join(",") === "ES,EN-US,ES",
+    JSON.stringify(log.translated)
+  );
+  check(
+    "translation is spoken in the listener's language",
+    log.spoken.map((s) => s.lang).join(",") === "ES,EN-US,ES" && log.spoken[0].text === "[ES] See you tomorrow?",
+    JSON.stringify(log.spoken)
+  );
+  check("after You speak, turn passes to Them", contexts[1].active === "them");
+  check("your panel shows what you said + Means:", contexts[1].me.text === "See you tomorrow?" && contexts[1].me.means === "[ES] See you tomorrow?");
+  check("after Them speak, turn passes back to You", contexts[2].active === "me");
+  check("Switch flips the speaker", contexts[3].active === "them" && contexts[4].active === "me");
+  check("Type works as the keyboard fallback", log.prompts === 1 && contexts[5].me.text === "Perfect");
+  check("tapping a panel makes it the speaker", contexts[6].active === "them");
+  check("Quick tab exits Talk with state kept", result.exit === "quick" && result.state.turns === 3, JSON.stringify(result.exit));
+
+  const again = await Conversation.runTalk(TALK_CONFIG, {
+    ui: { async presentTalk(context) { contexts.push(context); return "quick"; } },
+    state: result.state
+  });
+  check("returning to Talk keeps the last panels", contexts[contexts.length - 1].me.text === "Perfect" && again.exit === "quick");
+
+  const changed = await Conversation.runTalk(
+    { ...TALK_CONFIG, languages: { primary: "EN-US", conversation: "FR", defaultTarget: "EN-US" } },
+    { ui: { async presentTalk(context) { contexts.push(context); return null; } }, state: result.state }
+  );
+  check("language change in Settings starts fresh panels", contexts[contexts.length - 1].them.code === "FR" && contexts[contexts.length - 1].me.text === "");
+  check("dismissing the sheet exits as cancel", changed.exit === "cancel");
+}
+
+async function testTalkErrors() {
+  console.log("\nTalk errors and cancel");
+  const cancelled = loadTalkHarness({ dictations: [new Error("Dictation cancelled")] });
+  const state = cancelled.Conversation.createTalkState(TALK_CONFIG);
+  const taps = ["speak", "quick"];
+  const seen = [];
+  await cancelled.Conversation.runTalk(TALK_CONFIG, {
+    ui: { async presentTalk(c) { seen.push(c); return taps.shift(); } },
+    state
+  });
+  check("cancelled dictation: no translate, no error, same speaker",
+    cancelled.log.translated.length === 0 && !seen[1].error && seen[1].active === "me");
+
+  const noKey = loadTalkHarness({ failKey: true });
+  const s1 = noKey.Conversation.createTalkState(TALK_CONFIG);
+  await noKey.Conversation.runTalkTurn(s1, TALK_CONFIG, "Hello");
+  check("missing DeepL key shows a short error and keeps the turn",
+    /DeepL API key is missing\. Open Settings/.test(s1.error) && !/Keychain entry/.test(s1.error) && s1.active === "me" && noKey.log.spoken.length === 0,
+    s1.error);
+
+  const quota = loadTalkHarness({ failTranslate: true });
+  const s2 = quota.Conversation.createTalkState(TALK_CONFIG);
+  await quota.Conversation.runTalkTurn(s2, TALK_CONFIG, "Hello");
+  check("DeepL failure surfaces on the Talk screen", s2.error === "DeepL quota exceeded." && s2.sides.me.text === "");
+
+  const s3 = quota.Conversation.createTalkState(TALK_CONFIG);
+  quota.Conversation.setActiveSpeaker(s3, "them");
+  s3.error = "old";
+  quota.Conversation.setActiveSpeaker(s3, "me");
+  check("switching speaker clears an old error", s3.error === "" && s3.active === "me");
+}
+
+async function testTalkSharedHelpers() {
+  console.log("\nTalk Shared helpers");
+  const okBody = JSON.stringify({ translations: [{ detected_source_language: "EN", text: "¿Nos vemos mañana?" }] });
+  const { Shared, calls } = loadSharedWithRequests([{ status: 200, body: okBody }]);
+  const result = await Shared.translateToTarget("See you tomorrow?", "k:fx", "ES");
+  const posts = calls.filter((c) => c.method === "POST");
+  check("translateToTarget: one DeepL call", posts.length === 1, String(posts.length));
+  check("translateToTarget: sends listener language as target", /target_lang=ES|"target_lang":\s*"ES"/.test(String(posts[0]?.body)), String(posts[0]?.body).slice(0, 120));
+  check("translateToTarget: returns translation", result.translation === "¿Nos vemos mañana?" && result.targetLanguage === "ES");
+
+  check("dictation locale EN-US → en", Shared.dictationLocaleFor("EN-US") === "en");
+  check("dictation locale PT-BR → pt", Shared.dictationLocaleFor("PT-BR") === "pt");
+  const locales = [];
+  const withDictation = loadScriptableModule("scripts/SmartTranslateShared.js", {
+    Dictation: { async start(locale) { locales.push(locale); return "hola"; } }
+  });
+  const heard = await withDictation.dictateInLanguage("ES");
+  check("dictateInLanguage passes es to Dictation.start", locales[0] === "es" && heard === "hola", JSON.stringify(locales));
+}
+
+async function testFreeScriptTalkTab() {
+  console.log("\nFree script Talk tab");
+  const base = { version: 1, languages: { primary: "EN-US", conversation: "ES", defaultTarget: "EN-US" }, speech: { engine: "apple" } };
+  const run = await runFreeEntryScript({
+    config: { ...base, flags: { proGating: true } },
+    actions: ["conversation"],
+    talkExits: ["library", "quick"]
+  });
+  check("Talk tab opens the two-person Talk screen", run.conversations.join(",") === "talk,talk", run.conversations.join(","));
+  check("locked Library from Talk shows the Pro note, then returns to Talk", run.proNotes.join(",") === "library");
+  check("Talk receives free-tier locks", run.talkOptions?.locked?.library === true);
+  check("Talk state is carried between visits", run.talkOptions?.state?.marker === 1, JSON.stringify(run.talkOptions?.state));
+}
+
 async function main() {
   console.log("SmartTranslate automated checks");
   console.log(`Repo: ${root}`);
@@ -815,6 +1043,12 @@ async function main() {
   await testProNoteAndEmptyStateUI();
   await testFreeScriptGating();
   await testProKitEmptyStates();
+  testTalkHtml();
+  await testTalkPresentSwitch();
+  await testTalkFlow();
+  await testTalkErrors();
+  await testTalkSharedHelpers();
+  await testFreeScriptTalkTab();
 
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) {

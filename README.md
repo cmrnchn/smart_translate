@@ -87,13 +87,24 @@ Bottom tabs: **Quick** · **Talk**.
 | **Send** | Translate the current input → speak |
 | **Dictate** | Speech → translate immediately → speak |
 | **Copy** / **Share** | Copy or share the last translation |
-| **Talk** | Multi-turn conversation with a person |
+| **Talk** | Two people, one phone: tap the mic to speak, **Switch** (or tap a panel) to change who is talking |
 | **Library** | Past conversations |
 | **Settings** | Languages, API keys, speech engine |
 
 **People** and **Search** are Pro features; in v1 they show a "This is in Pro" note pointing to the Pro script. If the WebView fails, a native list menu shows Type / Paste / Transcribe / Send / Dictate / Talk / Settings.
 
 One-shot modes do **not** save translation history.
+
+### Talk (free)
+
+Talk has one panel for **You** (your primary language) and one for **Them** (your conversation language). The panel marked **SPEAKING** is the person whose turn it is:
+
+1. Tap the mic and speak. Dictation listens in that person's language.
+2. DeepL translates it into the other person's language. The panel shows the original text and a **Means:** line with the translation.
+3. The translation is read out loud with ElevenLabs if that is set up, otherwise with Apple speech.
+4. The turn then passes to the other person. **Switch**, or tapping a panel, changes the speaker by hand. **Type** is the keyboard fallback.
+
+Talk is kept in memory only and is not saved. Saved chats and People are Pro (the SmartTranslatePro script keeps its named-person sessions).
 
 ### Free vs Pro gating
 

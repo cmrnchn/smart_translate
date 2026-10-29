@@ -1219,6 +1219,28 @@ async function dictateText(config) {
   return await Dictation.start(locale);
 }
 
+// Talk: each speaker dictates in their own language, so Talk can't use the
+// "auto" dictation setting. Dictation.start wants "en"/"es", not "EN-US".
+function dictationLocaleFor(languageCode) {
+  return normalizeLanguage(languageCode).toLowerCase();
+}
+
+async function dictateInLanguage(languageCode) {
+  const locale = dictationLocaleFor(languageCode);
+  return locale ? await Dictation.start(locale) : await Dictation.start();
+}
+
+// Talk knows who is speaking, so it translates straight to the listener's
+// language (one DeepL call) instead of translateWithDeepL's auto-target.
+async function translateToTarget(text, apiKey, targetLanguage) {
+  const result = await requestDeepLTranslation(text, targetLanguage, apiKey);
+  return {
+    translation: result.translations[0].text,
+    detectedLanguage: result.translations[0].detected_source_language,
+    targetLanguage
+  };
+}
+
 // ============================================================
 // FREE / PRO GATING
 // ============================================================
@@ -1730,6 +1752,9 @@ module.exports = {
   showError,
   showSuccess,
   showNotice,
+  dictationLocaleFor,
+  dictateInLanguage,
+  translateToTarget,
   PRO_GATING_ENABLED,
   FREE_FEATURES,
   PRO_FEATURES,

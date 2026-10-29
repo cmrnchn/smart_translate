@@ -5,7 +5,7 @@
 // Menu:
 //   Quick        → type/paste/transcribe, then send to translate
 //   Dictate      → speech → translate once → speak
-//   Talk         → multi-turn session (separate module)
+//   Talk         → two people, one phone: tap to speak, tap to switch speaker
 //   Settings     → languages, API keys, speech engine
 //
 // Free vs Pro: this script is the free tier (Quick + Talk). Library, People,
@@ -41,6 +41,9 @@ let Shared;
 let Conversation;
 let UI;
 let modulesLoaded = false;
+// Talk panels survive Quick ↔ Talk switches for this run. Declared up here
+// because main() runs at top level before later declarations initialize.
+let talkState = null;
 try {
   Shared = importModule("SmartTranslateShared");
   Conversation = importModule("SmartTranslateConversation");
@@ -136,8 +139,14 @@ async function main() {
         await runProSurface(actionId, config);
         break;
       case "conversation":
-        await Conversation.runConversation(config);
+      case "talk": {
+        const talk = await runTalkTab(config);
+        config = talk.config;
+        if (talk.exit === "cancel") {
+          return;
+        }
         break;
+      }
       case "quick":
         break;
       case "settings": {
@@ -205,7 +214,7 @@ async function showMainMenu(config, quickState) {
       {
         header: "Talk",
         rows: [
-          { id: "conversation", title: "Talk", subtitle: "Multi-turn sessions", symbol: "person.2" },
+          { id: "conversation", title: "Talk", subtitle: "Two people, tap to switch speaker", symbol: "person.2" },
           { id: "settings", title: "Settings", subtitle: "Languages and keys", symbol: "gearshape" }
         ]
       }
@@ -343,6 +352,37 @@ async function runProSurface(actionId, config) {
 // ============================================================
 // SETUP / SETTINGS
 // ============================================================
+
+// Talk tab. Top-bar taps (Library/People/Search/Settings) are handled here
+// and land back on Talk; "quick" returns to the Quick home.
+
+async function runTalkTab(config) {
+  while (true) {
+    const tier = Shared.resolveTier("free", config);
+    const result = await Conversation.runTalk(config, {
+      ui: UI,
+      state: talkState,
+      locked: Shared.getLockedFeatures(tier)
+    });
+    talkState = result.state;
+    switch (result.exit) {
+      case "library":
+      case "people":
+      case "search":
+        await runProSurface(result.exit, config);
+        break;
+      case "settings": {
+        const updated = await runSettingsMenu(config);
+        if (updated) {
+          config = updated;
+        }
+        break;
+      }
+      default:
+        return { exit: result.exit, config };
+    }
+  }
+}
 
 async function runSettingsMenu(config) {
   while (true) {
