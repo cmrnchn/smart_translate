@@ -117,6 +117,12 @@ async function downloadSource(item) {
     "User-Agent": item.userAgent || `ScriptInstall/${installerVersion()}`
   };
   const text = await request.loadString();
+  const status = request.response?.statusCode;
+  if (status && (status < 200 || status >= 300)) {
+    throw new Error(
+      `${item.label || item.scriptName} download failed (HTTP ${status}). Nothing was saved. Check the URL and try again.`
+    );
+  }
   validateSource(text, item);
   return text;
 }
